@@ -237,6 +237,38 @@ def fetch_fii_data(limit: int = 10) -> pd.DataFrame:
         return fallback
 
 
+def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
+    """Fetch the linked Screener.in FII/DII buying screen and return its top rows."""
+    url = "https://www.screener.in/screens/1340210/fii-and-dii-buying-stocks/"
+    empty_columns = ["Company", "CMP (Rs.)", "P/E", "Market Cap (Rs. Cr)", "ROCE (%)", "FII change (%)", "DII change (%)"]
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StockAnalysisDashboard/1.0)"},
+            timeout=30,
+            verify=False,
+        )
+        response.raise_for_status()
+        tables = pd.read_html(io.StringIO(response.text))
+        screen = next(table for table in tables if "Chg in FII Hold  %" in table.columns)
+        screen = screen.rename(
+            columns={
+                "CMP  Rs.": "CMP (Rs.)",
+                "Mar Cap  Rs.Cr.": "Market Cap (Rs. Cr)",
+                "ROCE  %": "ROCE (%)",
+                "Chg in FII Hold  %": "FII change (%)",
+                "Chg in DII Hold  %": "DII change (%)",
+            }
+        )
+        selected = [column for column in empty_columns if column in screen.columns]
+        result = screen[selected].head(limit).copy()
+        for column in selected[1:]:
+            result[column] = pd.to_numeric(result[column], errors="coerce")
+        return result.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=empty_columns)
+
+
 def fetch_bulk_deals(limit: int = 10) -> pd.DataFrame:
     """Return recent bulk deals from the NSE archive CSV."""
     url = "https://archives.nseindia.com/content/equities/bulk.csv"

@@ -195,6 +195,14 @@ if symbol_input:
         returns = compute_daily_returns(data)
         summary = summarize_stock(data)
 
+        top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
+        st.subheader("Top 10 FII and DII buying stocks")
+        st.caption("Screener.in screen: FII holding change > 0.3%, DII holding change > 0.3%, market cap > ₹1,000 crore.")
+        if top_stocks.empty:
+            st.info("The Screener.in top-10 list is temporarily unavailable.")
+        else:
+            st.dataframe(top_stocks, use_container_width=True, hide_index=True)
+
         st.subheader(f"{profile.get('longName') or profile.get('shortName') or ticker}")
         st.caption(f"{ticker} • {profile.get('sector') or 'N/A'} • {profile.get('industry') or 'N/A'}")
 
@@ -391,31 +399,9 @@ if symbol_input:
                 recent_fii_df = recent_fii_df.sort_values("date").reset_index(drop=True)
                 st.caption("Showing the latest five reported working days of FII/DII activity.")
 
-                top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
-                st.subheader("Top 10 FII and DII buying stocks")
-                st.caption("Screener.in screen: FII holding change > 0.3%, DII holding change > 0.3%, market cap > ₹1,000 crore.")
-                if top_stocks.empty:
-                    st.info("The Screener.in top-10 list is temporarily unavailable.")
-                else:
-                    st.dataframe(top_stocks, use_container_width=True, hide_index=True)
-
                 fii_view = recent_fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
                 fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
                 st.dataframe(fii_view, use_container_width=True)
-
-                trend_chart = px.line(
-                    recent_fii_df,
-                    x="date",
-                    y="netValue",
-                    color="category",
-                    markers=True,
-                    title="FII / DII Daily Net Investment Trend",
-                    template="plotly_white",
-                    labels={"date": "Date", "netValue": "Net investment (₹ crore)", "category": "Investor type"},
-                )
-                trend_chart.add_hline(y=0, line_dash="dash", line_color="#6b7280")
-                trend_chart.update_layout(hovermode="x unified")
-                st.plotly_chart(trend_chart, use_container_width=True)
 
                 trend_summary = analyze_institutional_trend(recent_fii_df, recent_window=3)
                 st.subheader("Short-term flow outlook")

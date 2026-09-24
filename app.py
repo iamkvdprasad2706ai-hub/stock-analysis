@@ -286,10 +286,10 @@ if symbol_input:
                     st.warning("Global macro events are not automatically verified in this dashboard. Review current news, sector conditions, and exchange disclosures before acting.")
 
             st.subheader("Top 10 penny-stock ideas")
-            st.caption("Same FII/DII screen, filtered to CMP ≤ ₹10. These are high-risk candidates and may have limited liquidity.")
+            st.caption("Ten lower-priced stocks from the same FII/DII screen, with no fixed ₹10 cap. These are high-risk candidates and may have limited liquidity.")
             penny_stocks = fetch_screener_fii_dii_penny_stocks(limit=10)
             if penny_stocks.empty:
-                st.info("No stocks priced at ₹10 or below currently match the linked Screener.in FII/DII buying criteria. The table will populate when qualifying stocks appear.")
+                st.info("Lower-priced candidates are temporarily unavailable from the linked Screener.in screen.")
             else:
                 penny_history = {}
                 with st.spinner("Calculating penny-stock setups..."):

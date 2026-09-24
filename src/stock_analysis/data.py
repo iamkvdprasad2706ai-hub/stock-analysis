@@ -281,7 +281,7 @@ def fetch_screener_fii_dii_top_stocks(limit: int = 10, page: int = 1) -> pd.Data
 
 
 def fetch_screener_fii_dii_penny_stocks(limit: int = 10) -> pd.DataFrame:
-    """Return low-priced stocks from all pages of the linked FII/DII screen."""
+    """Return the lowest-priced stocks from all pages of the linked FII/DII screen."""
     pages = [fetch_screener_fii_dii_top_stocks(limit=100, page=page) for page in range(1, 5)]
     candidates = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
     if candidates.empty or "CMP (Rs.)" not in candidates.columns:
@@ -289,9 +289,8 @@ def fetch_screener_fii_dii_penny_stocks(limit: int = 10) -> pd.DataFrame:
     candidates["CMP (Rs.)"] = pd.to_numeric(candidates["CMP (Rs.)"], errors="coerce")
     candidates["FII change (%)"] = pd.to_numeric(candidates["FII change (%)"], errors="coerce")
     candidates["DII change (%)"] = pd.to_numeric(candidates["DII change (%)"], errors="coerce")
-    penny = candidates[candidates["CMP (Rs.)"].le(10)].copy()
-    penny["Combined ownership change (%)"] = penny["FII change (%)"].fillna(0) + penny["DII change (%)"].fillna(0)
-    return penny.sort_values("Combined ownership change (%)", ascending=False).head(limit).reset_index(drop=True)
+    candidates["Combined ownership change (%)"] = candidates["FII change (%)"].fillna(0) + candidates["DII change (%)"].fillna(0)
+    return candidates.sort_values(["CMP (Rs.)", "Combined ownership change (%)"], ascending=[True, False]).head(limit).reset_index(drop=True)
 
 
 def fetch_bulk_deals(limit: int = 10) -> pd.DataFrame:

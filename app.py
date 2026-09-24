@@ -18,6 +18,7 @@ if SRC_DIR not in sys.path:
 
 from stock_analysis.analysis import (  # noqa: E402
     analyze_institutional_trend,
+    build_market_ideas,
     calculate_macd,
     calculate_moving_average,
     calculate_rsi,
@@ -244,8 +245,8 @@ def display_value(value: Any, formatter=format_currency) -> str:
 st.title("NSE Stock Analysis Dashboard")
 st.caption("Enter a stock name or ticker to load its NSE market data and key indicators.")
 
-workspace = st.sidebar.radio("Workspace", ["Stock workspace", "Market screener"], index=0)
-st.sidebar.caption("Use Stock workspace for chart and trade ideas. Use Market screener for FII/DII discovery.")
+workspace = st.sidebar.radio("Workspace", ["Stock workspace", "Market screener", "Market ideas"], index=0)
+st.sidebar.caption("Stock workspace: charts and trade ideas. Market screener: discovery. Market ideas: ranked setups.")
 
 symbol_input = st.text_input("Stock name or ticker", value="Reliance")
 period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
@@ -264,6 +265,26 @@ if symbol_input:
         summary = summarize_stock(data)
 
         top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
+        if workspace == "Market ideas":
+            st.subheader("Top 10 market ideas")
+            st.caption("Ranked from the Screener.in FII/DII buying universe using trend, RSI, volume confirmation, ownership change, and risk/reward.")
+            macro_risk = st.selectbox("Macro-risk overlay", ["Neutral", "Elevated", "High"], help="Manual risk adjustment for geopolitical, trade-policy, war, and natural-disaster uncertainty. It is not a live event feed.")
+            if top_stocks.empty or "Symbol" not in top_stocks.columns:
+                st.info("The market-ideas universe is temporarily unavailable.")
+            else:
+                idea_history = {}
+                with st.spinner("Calculating technical setups for the top-10 universe..."):
+                    for idea_symbol in top_stocks["Symbol"].dropna().astype(str):
+                        idea_history[idea_symbol.upper()] = load_stock_data(idea_symbol, period="6mo")
+                market_ideas = build_market_ideas(top_stocks, idea_history, macro_risk=macro_risk)
+                if market_ideas.empty:
+                    st.warning("Price history was unavailable for the screened stocks.")
+                else:
+                    st.dataframe(market_ideas, width="stretch", hide_index=True)
+                    st.caption("Entry is the latest available price. Targets and stop loss are model levels for a 2-6 week horizon, not personalized financial advice.")
+                    st.warning("Global macro events are not automatically verified in this dashboard. Review current news, sector conditions, and exchange disclosures before acting.")
+            st.stop()
+
         if workspace == "Market screener":
             st.subheader("Market screener")
             st.caption("Screener.in screen: FII holding change > 0.3%, DII holding change > 0.3%, market cap > ₹1,000 crore.")

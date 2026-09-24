@@ -72,6 +72,82 @@ def analyze_institutional_trend(fii_data: pd.DataFrame, recent_window: int = 5) 
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_market_ideas(screen_data: pd.DataFrame, price_data: dict[str, pd.DataFrame], macro_risk: str = "Neutral") -> pd.DataFrame:
+    """Rank screened stocks using technical momentum, volume, ownership, and risk inputs."""
+    columns = ["Rank", "Symbol", "Company", "Score", "View", "Entry", "Stop loss", "Target 1", "Target 2", "Target 3", "Horizon", "Drivers"]
+    if screen_data.empty:
+        return pd.DataFrame(columns=columns)
+
+    ideas = []
+    macro_penalty = {"Neutral": 0, "Elevated": 8, "High": 15}.get(macro_risk, 0)
+    for _, row in screen_data.iterrows():
+        symbol = str(row.get("Symbol", "")).upper()
+        history = price_data.get(symbol)
+        if history is None or history.empty or "close" not in history.columns:
+            continue
+        close = pd.to_numeric(history["close"], errors="coerce").dropna()
+        if close.empty:
+            continue
+        price = float(close.iloc[-1])
+        ma20 = float(close.rolling(20, min_periods=1).mean().iloc[-1])
+        ma50 = float(close.rolling(50, min_periods=1).mean().iloc[-1])
+        rsi = float(calculate_rsi(history).iloc[-1])
+        volume = pd.to_numeric(history.get("volume"), errors="coerce")
+        volume_ratio = float(volume.iloc[-1] / volume.tail(20).mean()) if volume is not None and volume.tail(20).mean() else 1.0
+        score = 50 - macro_penalty
+        drivers = []
+        if price > ma20 > ma50:
+            score += 20
+            drivers.append("bullish trend")
+        elif price < ma20 < ma50:
+            score -= 20
+            drivers.append("weak trend")
+        if 45 <= rsi <= 68:
+            score += 10
+            drivers.append("healthy RSI")
+        elif rsi > 75 or rsi < 30:
+            score -= 8
+            drivers.append("extreme RSI")
+        if volume_ratio >= 1.2:
+            score += 12
+            drivers.append("volume confirmation")
+        else:
+            drivers.append("normal volume")
+        fii_change = float(row.get("FII change (%)") or 0)
+        dii_change = float(row.get("DII change (%)") or 0)
+        score += min(12, max(-5, fii_change + dii_change))
+        if fii_change > 0 and dii_change > 0:
+            drivers.append("FII/DII accumulation")
+        if macro_penalty:
+            drivers.append(f"{macro_risk.lower()} macro overlay")
+        score = max(0, min(100, round(score, 1)))
+        view = "BUY" if score >= 68 else "HOLD" if score >= 48 else "SELL"
+        stop_loss = round(price * (0.90 if macro_risk == "High" else 0.92), 2)
+        target_1 = round(price * 1.04, 2)
+        target_2 = round(price * 1.08, 2)
+        target_3 = round(price * 1.12, 2)
+        ideas.append(
+            {
+                "Rank": 0,
+                "Symbol": symbol,
+                "Company": row.get("Company", symbol),
+                "Score": score,
+                "View": view,
+                "Entry": round(price, 2),
+                "Stop loss": stop_loss,
+                "Target 1": target_1,
+                "Target 2": target_2,
+                "Target 3": target_3,
+                "Horizon": "2-6 weeks",
+                "Drivers": ", ".join(drivers),
+            }
+        )
+    result = pd.DataFrame(ideas, columns=columns).sort_values(["Score", "View"], ascending=[False, True]).head(10).reset_index(drop=True)
+    if not result.empty:
+        result["Rank"] = range(1, len(result) + 1)
+    return result
+
+
 def compute_daily_returns(data: pd.DataFrame) -> pd.Series:
     if "close" not in data.columns:
         raise ValueError("Data must include a 'close' column.")

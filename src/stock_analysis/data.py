@@ -240,7 +240,7 @@ def fetch_fii_data(limit: int = 10) -> pd.DataFrame:
 def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
     """Fetch the linked Screener.in FII/DII buying screen and return its top rows."""
     url = "https://www.screener.in/screens/1340210/fii-and-dii-buying-stocks/"
-    empty_columns = ["Company", "CMP (Rs.)", "P/E", "Market Cap (Rs. Cr)", "ROCE (%)", "FII change (%)", "DII change (%)"]
+    empty_columns = ["Symbol", "Company", "CMP (Rs.)", "P/E", "Market Cap (Rs. Cr)", "ROCE (%)", "FII change (%)", "DII change (%)"]
     try:
         response = requests.get(
             url,
@@ -251,6 +251,15 @@ def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
         response.raise_for_status()
         tables = pd.read_html(io.StringIO(response.text))
         screen = next(table for table in tables if "Chg in FII Hold  %" in table.columns)
+        symbols = re.findall(r'href="/company/([^/]+)/"', response.text)
+        company_names = [re.sub(r"<[^>]+>", "", name).strip() for name in re.findall(r'<a href="/company/[^/]+/"[^>]*>(.*?)</a>', response.text)]
+        row_count = min(len(screen), len(symbols), len(company_names))
+        if row_count == 0:
+            return pd.DataFrame(columns=empty_columns)
+        screen = screen.head(row_count).copy()
+        screen.insert(1, "Symbol", [symbol.upper() for symbol in symbols[:row_count]])
+        screen["Company"] = company_names[:row_count]
+        screen = screen[screen["Symbol"].str.match(r"^[A-Z][A-Z0-9]+$", na=False)].head(limit).copy()
         screen = screen.rename(
             columns={
                 "CMP  Rs.": "CMP (Rs.)",
@@ -261,8 +270,8 @@ def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
             }
         )
         selected = [column for column in empty_columns if column in screen.columns]
-        result = screen[selected].head(limit).copy()
-        for column in selected[1:]:
+        result = screen[selected].copy()
+        for column in selected[2:]:
             result[column] = pd.to_numeric(result[column], errors="coerce")
         return result.reset_index(drop=True)
     except Exception:

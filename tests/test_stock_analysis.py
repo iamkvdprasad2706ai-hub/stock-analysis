@@ -1,6 +1,6 @@
 import pandas as pd
 
-from stock_analysis.analysis import analyze_institutional_trend, generate_recommendations, summarize_stock
+from stock_analysis.analysis import analyze_institutional_trend, build_market_ideas, generate_recommendations, summarize_stock
 from stock_analysis.data import fetch_bulk_deals, fetch_fii_data, normalize_stock_symbol
 
 
@@ -65,3 +65,14 @@ def test_analyze_institutional_trend_projects_direction():
     trend = analyze_institutional_trend(flow, recent_window=3)
     assert trend.iloc[0]["direction"] == "Increasing buying"
     assert trend.iloc[0]["projected_next"] > trend.iloc[0]["recent_average"]
+
+
+def test_build_market_ideas_returns_trade_levels():
+    screen = pd.DataFrame(
+        [{"Symbol": "TEST", "Company": "Test Co", "FII change (%)": 1.0, "DII change (%)": 1.5}]
+    )
+    history = {"TEST": pd.DataFrame({"close": [100 + i for i in range(60)], "volume": [1000] * 40 + [2500] * 20})}
+    ideas = build_market_ideas(screen, history)
+    assert len(ideas) == 1
+    assert ideas.iloc[0]["View"] in {"BUY", "HOLD", "SELL"}
+    assert ideas.iloc[0]["Stop loss"] < ideas.iloc[0]["Entry"] < ideas.iloc[0]["Target 1"]

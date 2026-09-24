@@ -27,7 +27,6 @@ from stock_analysis.data import (  # noqa: E402
     fetch_bulk_deals,
     fetch_fii_data,
     fetch_stock_profile,
-    get_optional_ai_summary,
     load_stock_data,
     normalize_stock_symbol,
 )
@@ -463,11 +462,6 @@ if symbol_input:
             st.markdown("### Why this view?")
             for reason in recommendation["reasons"]:
                 st.markdown(f"- {reason}")
-
-            ai_summary = get_optional_ai_summary(symbol_input, summary, profile, fii_df, bulk_df)
-            st.markdown("### Optional AI enhancement")
-            st.caption("Set OPENAI_API_KEY locally in your environment to enable a richer narrative. The key stays outside this repo and is never stored in source control.")
-            st.info(ai_summary)
 
     except ValueError as exc:
         st.error(str(exc))

@@ -385,12 +385,17 @@ if symbol_input:
                 st.info("No recent FII/DII data is available right now.")
             else:
                 fii_df = fii_df.sort_values("date").reset_index(drop=True)
-                fii_view = fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
+                recent_dates = fii_df["date"].dropna().drop_duplicates().nlargest(5)
+                recent_fii_df = fii_df[fii_df["date"].isin(recent_dates)].copy()
+                recent_fii_df = recent_fii_df.sort_values("date").reset_index(drop=True)
+                st.caption("Showing the latest five reported working days of FII/DII activity.")
+
+                fii_view = recent_fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
                 fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
                 st.dataframe(fii_view, use_container_width=True)
 
                 trend_chart = px.line(
-                    fii_df,
+                    recent_fii_df,
                     x="date",
                     y="netValue",
                     color="category",
@@ -403,7 +408,7 @@ if symbol_input:
                 trend_chart.update_layout(hovermode="x unified")
                 st.plotly_chart(trend_chart, use_container_width=True)
 
-                cumulative = fii_df.copy()
+                cumulative = recent_fii_df.copy()
                 cumulative["cumulativeNet"] = cumulative.groupby("category")["netValue"].cumsum()
                 cumulative_chart = px.line(
                     cumulative,
@@ -419,7 +424,7 @@ if symbol_input:
                 cumulative_chart.update_layout(hovermode="x unified")
                 st.plotly_chart(cumulative_chart, use_container_width=True)
 
-                trend_summary = analyze_institutional_trend(fii_df)
+                trend_summary = analyze_institutional_trend(recent_fii_df, recent_window=3)
                 st.subheader("Short-term flow outlook")
                 if trend_summary.empty:
                     st.info("There is not enough institutional history to estimate a trend.")
@@ -437,7 +442,7 @@ if symbol_input:
                     st.dataframe(outlook, use_container_width=True, hide_index=True)
                     st.caption("Projection uses the change between the recent and previous five reported observations. It is a statistical signal, not a guaranteed forecast.")
 
-                net_flow = fii_df.groupby("category", as_index=False)["netValue"].sum()
+                net_flow = recent_fii_df.groupby("category", as_index=False)["netValue"].sum()
                 flow_chart = px.bar(
                     net_flow,
                     x="category",
@@ -450,7 +455,7 @@ if symbol_input:
                 flow_chart.update_layout(showlegend=False)
                 st.plotly_chart(flow_chart, use_container_width=True)
 
-                total_net = fii_df["netValue"].sum()
+                total_net = recent_fii_df["netValue"].sum()
                 st.metric("Overall net allocation", f"₹{total_net:,.2f} crore")
                 st.caption("Positive values suggest net buying; negative values suggest net selling.")
 

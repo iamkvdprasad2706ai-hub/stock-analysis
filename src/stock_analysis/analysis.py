@@ -77,6 +77,9 @@ def generate_recommendations(data: pd.DataFrame, profile: dict | None = None, fi
             "target_prices": [None, None, None],
             "target_price": None,
             "stop_loss": None,
+            "price_change": None,
+            "rsi": None,
+            "institutional_flow": "unknown",
             "summary": "Not enough market data to provide a trading action.",
         }
 
@@ -92,6 +95,9 @@ def generate_recommendations(data: pd.DataFrame, profile: dict | None = None, fi
             "target_prices": [None, None, None],
             "target_price": None,
             "stop_loss": None,
+            "price_change": None,
+            "rsi": None,
+            "institutional_flow": "unknown",
             "summary": "No usable close-price series was found.",
         }
 
@@ -200,5 +206,8 @@ def generate_recommendations(data: pd.DataFrame, profile: dict | None = None, fi
         "target_prices": [target_1, target_2, target_3],
         "target_price": target_price,
         "stop_loss": stop_loss,
+        "price_change": round(percent_change, 2),
+        "rsi": round(rsi, 1),
+        "institutional_flow": "positive" if fii_net > 0 else "mixed" if fii_net == 0 else "negative",
         "summary": summary,
     }

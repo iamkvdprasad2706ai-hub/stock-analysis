@@ -115,6 +115,25 @@ st.markdown(
         color: #52606d;
         margin-top: 5px;
     }
+    .summary-card {
+        border: 1px solid #d6dee7;
+        border-left: 5px solid #c92a2a;
+        border-radius: 10px;
+        padding: 14px 16px;
+        background: #fffafa;
+        margin: 10px 0 16px;
+    }
+    .summary-title {
+        font-size: 15px;
+        font-weight: 800;
+        color: #263238;
+        margin-bottom: 10px;
+    }
+    .summary-text {
+        font-size: 16px;
+        color: #3f4d5a;
+        line-height: 1.5;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -457,7 +476,21 @@ if symbol_input:
             else:
                 st.warning("Entry, target, and stop-loss levels are unavailable because the market data is incomplete.")
 
-            st.markdown(f"**Summary:** {recommendation.get('summary', 'No recommendation summary is available.')}")
+            summary_change = recommendation.get("price_change")
+            summary_change_text = f"{summary_change:+.2f}%" if summary_change is not None else "N/A"
+            summary_rsi = recommendation.get("rsi")
+            summary_rsi_text = f"{summary_rsi:.1f}" if summary_rsi is not None else "N/A"
+            summary_flow = str(recommendation.get("institutional_flow", "unknown")).capitalize()
+            summary_price = recommendation.get("entry_price")
+            summary_price_text = format_currency(summary_price) if summary_price is not None else "N/A"
+            st.markdown(
+                f"<div class='summary-card'>"
+                f"<div class='summary-title'>Summary</div>"
+                f"<div class='summary-text'><strong class='{action_class}'>{action}</strong> view at <strong>{summary_price_text}</strong>.</div>"
+                f"<div class='trade-note'><strong>Price change:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
             st.markdown("### Why this view?")
             for reason in recommendation["reasons"]:

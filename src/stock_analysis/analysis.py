@@ -26,6 +26,18 @@ def calculate_rsi(data: pd.DataFrame, window: int = 14) -> pd.Series:
     return rsi.fillna(50)
 
 
+def calculate_macd(data: pd.DataFrame, fast: int = 12, slow: int = 26, signal: int = 9) -> pd.DataFrame:
+    """Calculate MACD, signal, and histogram series for a close-price dataframe."""
+    result = data.copy()
+    close = pd.to_numeric(result["close"], errors="coerce")
+    fast_ema = close.ewm(span=fast, adjust=False, min_periods=1).mean()
+    slow_ema = close.ewm(span=slow, adjust=False, min_periods=1).mean()
+    result["macd"] = fast_ema - slow_ema
+    result["macd_signal"] = result["macd"].ewm(span=signal, adjust=False, min_periods=1).mean()
+    result["macd_histogram"] = result["macd"] - result["macd_signal"]
+    return result
+
+
 def compute_daily_returns(data: pd.DataFrame) -> pd.Series:
     if "close" not in data.columns:
         raise ValueError("Data must include a 'close' column.")

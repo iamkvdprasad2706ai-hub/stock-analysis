@@ -8,6 +8,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 SRC_DIR = os.path.join(ROOT, "src")
@@ -15,7 +16,9 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from stock_analysis.analysis import (  # noqa: E402
+    calculate_macd,
     calculate_moving_average,
+    calculate_rsi,
     compute_daily_returns,
     generate_recommendations,
     summarize_stock,
@@ -124,9 +127,33 @@ def format_currency(value: Any) -> str:
         return "N/A"
     try:
         numeric = float(value)
+        if pd.isna(numeric) or numeric == 0:
+            return "N/A"
         return f"₹{numeric:,.2f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def format_market_cap(value: Any) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        numeric = float(value)
+        if pd.isna(numeric) or numeric <= 0:
+            return "N/A"
+        if numeric >= 1_00_00_00_00_000:
+            return f"₹{numeric / 1_00_00_00_00_000:.2f} lakh crore"
+        if numeric >= 1_00_00_000:
+            return f"₹{numeric / 1_00_00_000:.2f} crore"
+        return f"₹{numeric:,.0f}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
+def display_value(value: Any, formatter=format_currency) -> str:
+    if value is None or value == "":
+        return "N/A"
+    return formatter(value)
 
 
 st.title("NSE Stock Analysis Dashboard")
@@ -143,6 +170,8 @@ if symbol_input:
         data = data.sort_values("date").reset_index(drop=True)
         data = calculate_moving_average(data, window=20)
         data = calculate_moving_average(data, window=50)
+        data = calculate_macd(data)
+        data["rsi_14"] = calculate_rsi(data).reindex(data.index).fillna(50)
         returns = compute_daily_returns(data)
         summary = summarize_stock(data)
 
@@ -164,15 +193,17 @@ if symbol_input:
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Latest close</div><div class='snapshot-value'>{format_currency(summary['latest_close'])}</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Avg daily return</div><div class='snapshot-value {('positive' if summary['average_daily_return'] > 0 else 'negative' if summary['average_daily_return'] < 0 else 'neutral')}'>{summary['average_daily_return']:.2f}%</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W High</div><div class='snapshot-value'>{format_currency(profile.get('fiftyTwoWeekHigh'))}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Market cap</div><div class='snapshot-value'>{format_currency(float(profile.get('marketCap') or 0))}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>P/E</div><div class='snapshot-value'>{profile.get('trailingPE') or 'N/A'}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Market cap</div><div class='snapshot-value'>{format_market_cap(profile.get('marketCap'))}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>P/E</div><div class='snapshot-value'>{display_value(profile.get('trailingPE'))}</div></div>", unsafe_allow_html=True)
 
         with right_col:
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Change</div><div class='snapshot-value {('positive' if summary['percent_change'] > 0 else 'negative' if summary['percent_change'] < 0 else 'neutral')}'>{summary['percent_change']:.2f}%</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Volatility</div><div class='snapshot-value'>{summary['volatility']:.2f}%</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W Low</div><div class='snapshot-value'>{format_currency(profile.get('fiftyTwoWeekLow'))}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Book value</div><div class='snapshot-value'>{profile.get('priceToBook') or 'N/A'}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Dividend yield</div><div class='snapshot-value'>{((profile.get('dividendYield') or 0) * 100):.2f}%</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Book value</div><div class='snapshot-value'>{format_currency(profile.get('bookValue'))}</div></div>", unsafe_allow_html=True)
+            dividend_yield = profile.get('dividendYield')
+            dividend_text = f"{float(dividend_yield) * 100:.2f}%" if dividend_yield is not None else "N/A"
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Dividend yield</div><div class='snapshot-value'>{dividend_text}</div></div>", unsafe_allow_html=True)
 
         portfolio_df = pd.DataFrame(
             {
@@ -191,6 +222,60 @@ if symbol_input:
         tab_prices, tab_profile, tab_stats, tab_table, tab_fii, tab_bulk, tab_reco = st.tabs(["Price charts", "Company profile", "Valuation & stats", "Data table", "FII / DII", "Bulk deals", "Recommendations"])
 
         with tab_prices:
+            technical_chart = make_subplots(
+                rows=4,
+                cols=1,
+                shared_xaxes=True,
+                vertical_spacing=0.025,
+                row_heights=[0.52, 0.14, 0.17, 0.17],
+                subplot_titles=("Price / trend", "Volume", "RSI 14", "MACD 12 26 9"),
+            )
+            technical_chart.add_trace(
+                go.Candlestick(
+                    x=data["date"],
+                    open=data["open"],
+                    high=data["high"],
+                    low=data["low"],
+                    close=data["close"],
+                    name="Price",
+                    increasing_line_color="#0f9d58",
+                    decreasing_line_color="#d93025",
+                ),
+                row=1,
+                col=1,
+            )
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=data["ma_20"], name="EMA 20", line={"color": "#f59e0b", "width": 2}), row=1, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=data["ma_50"], name="EMA 50", line={"color": "#7c3aed", "width": 2}), row=1, col=1)
+
+            bullish_cross = (data["ma_20"] > data["ma_50"]) & (data["ma_20"].shift(1) <= data["ma_50"].shift(1))
+            bearish_cross = (data["ma_20"] < data["ma_50"]) & (data["ma_20"].shift(1) >= data["ma_50"].shift(1))
+            technical_chart.add_trace(go.Scatter(x=data.loc[bullish_cross, "date"], y=data.loc[bullish_cross, "close"], mode="markers+text", text=["BUY"] * int(bullish_cross.sum()), textposition="bottom center", marker={"symbol": "triangle-up", "size": 11, "color": "#0f9d58"}, name="BUY signal"), row=1, col=1)
+            technical_chart.add_trace(go.Scatter(x=data.loc[bearish_cross, "date"], y=data.loc[bearish_cross, "close"], mode="markers+text", text=["SELL"] * int(bearish_cross.sum()), textposition="top center", marker={"symbol": "triangle-down", "size": 11, "color": "#d93025"}, name="SELL signal"), row=1, col=1)
+
+            volume_colors = ["#0f9d58" if close >= open_price else "#d93025" for close, open_price in zip(data["close"], data["open"])]
+            technical_chart.add_trace(go.Bar(x=data["date"], y=data["volume"], marker_color=volume_colors, name="Volume", showlegend=False), row=2, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=data["rsi_14"], name="RSI", line={"color": "#7c3aed", "width": 2}), row=3, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=[70] * len(data), name="RSI 70", line={"color": "#9ca3af", "dash": "dash", "width": 1}, showlegend=False), row=3, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=[30] * len(data), name="RSI 30", line={"color": "#9ca3af", "dash": "dash", "width": 1}, showlegend=False), row=3, col=1)
+            histogram_colors = ["#0f9d58" if value >= 0 else "#d93025" for value in data["macd_histogram"]]
+            technical_chart.add_trace(go.Bar(x=data["date"], y=data["macd_histogram"], marker_color=histogram_colors, name="MACD histogram"), row=4, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=data["macd"], name="MACD", line={"color": "#2563eb", "width": 2}), row=4, col=1)
+            technical_chart.add_trace(go.Scatter(x=data["date"], y=data["macd_signal"], name="Signal", line={"color": "#f97316", "width": 2}), row=4, col=1)
+            technical_chart.update_yaxes(title_text="Price", row=1, col=1)
+            technical_chart.update_yaxes(title_text="Volume", row=2, col=1)
+            technical_chart.update_yaxes(title_text="RSI", range=[0, 100], row=3, col=1)
+            technical_chart.update_yaxes(title_text="MACD", row=4, col=1)
+            technical_chart.update_layout(
+                title=f"{ticker} Technical Analysis",
+                template="plotly_white",
+                height=1050,
+                hovermode="x unified",
+                xaxis_rangeslider_visible=False,
+                legend={"orientation": "h", "y": 1.02, "x": 0},
+                margin={"l": 55, "r": 25, "t": 90, "b": 35},
+            )
+            st.plotly_chart(technical_chart, use_container_width=True)
+
             candlestick = go.Figure(
                 data=[
                     go.Candlestick(
@@ -231,12 +316,12 @@ if symbol_input:
 
                 **Exchange**: {profile.get('exchange') or 'NSE'}
 
-                **Website**: {profile.get('website') or 'N/A'}
+                **Company / NSE website**: {profile.get('website') or 'NSE quote page'}
                 """
             )
 
             if profile.get("website"):
-                st.markdown(f"[Official website]({profile.get('website')})")
+                st.markdown(f"[Open company / NSE website]({profile.get('website')})")
 
             st.subheader("Daily return distribution")
             returns_pct = returns * 100

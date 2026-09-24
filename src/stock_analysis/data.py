@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import math
 import os
 import re
 import warnings
@@ -125,50 +126,88 @@ def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d") -> pd
 
 
 def fetch_stock_profile(symbol: str) -> dict:
-    """Retrieve the latest market profile and key stats for a stock symbol from Yahoo Finance."""
+    """Retrieve a complete, normalized market profile with resilient Yahoo fallbacks."""
     ticker = normalize_stock_symbol(symbol)
+    symbol_name = ticker.replace(".NS", "")
+    profile = {
+        "symbol": ticker,
+        "shortName": symbol_name,
+        "longName": symbol_name,
+        "sector": "N/A",
+        "industry": "N/A",
+        "marketCap": None,
+        "currency": "INR",
+        "trailingPE": None,
+        "forwardPE": None,
+        "dividendYield": None,
+        "beta": None,
+        "fiftyTwoWeekHigh": None,
+        "fiftyTwoWeekLow": None,
+        "regularMarketPrice": None,
+        "targetMeanPrice": None,
+        "bookValue": None,
+        "priceToBook": None,
+        "averageVolume": None,
+        "website": f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}",
+        "exchange": "NSE",
+    }
+
+    def first_value(*values):
+        for value in values:
+            if value is not None and value != "" and not (isinstance(value, float) and math.isnan(value)):
+                return value
+        return None
+
     try:
         market_ticker = yf.Ticker(ticker)
         info = market_ticker.info or {}
-        if not info:
-            return {
-                "symbol": ticker,
-                "shortName": ticker.replace(".NS", ""),
-                "sector": "N/A",
-                "industry": "N/A",
-                "marketCap": 0,
-                "currency": "INR",
+        fast_info = market_ticker.fast_info or {}
+        history = pd.DataFrame()
+        try:
+            history = market_ticker.history(period="1y", interval="1d", auto_adjust=False)
+        except Exception:
+            pass
+
+        history_close = pd.to_numeric(history.get("Close"), errors="coerce").dropna() if not history.empty else pd.Series(dtype=float)
+        history_price = float(history_close.iloc[-1]) if not history_close.empty else None
+
+        profile.update(
+            {
+                "shortName": first_value(info.get("shortName"), symbol_name),
+                "longName": first_value(info.get("longName"), info.get("shortName"), symbol_name),
+                "sector": first_value(info.get("sector"), "N/A"),
+                "industry": first_value(info.get("industry"), "N/A"),
+                "marketCap": first_value(info.get("marketCap")),
+                "currency": first_value(info.get("currency"), "INR"),
+                "trailingPE": first_value(info.get("trailingPE")),
+                "forwardPE": first_value(info.get("forwardPE")),
+                "dividendYield": first_value(info.get("dividendYield")),
+                "beta": first_value(info.get("beta")),
+                "fiftyTwoWeekHigh": first_value(info.get("fiftyTwoWeekHigh")),
+                "fiftyTwoWeekLow": first_value(info.get("fiftyTwoWeekLow")),
+                "regularMarketPrice": first_value(info.get("regularMarketPrice"), fast_info.get("last_price"), history_price),
+                "targetMeanPrice": first_value(info.get("targetMeanPrice")),
+                "bookValue": first_value(info.get("bookValue")),
+                "priceToBook": first_value(info.get("priceToBook")),
+                "averageVolume": first_value(info.get("averageVolume"), fast_info.get("three_month_average_volume")),
+                "website": first_value(info.get("website"), profile["website"]),
+                "exchange": first_value(info.get("exchange"), "NSE"),
             }
-        return {
-            "symbol": ticker,
-            "shortName": info.get("shortName") or ticker.replace(".NS", ""),
-            "longName": info.get("longName") or info.get("shortName") or ticker.replace(".NS", ""),
-            "sector": info.get("sector") or "N/A",
-            "industry": info.get("industry") or "N/A",
-            "marketCap": info.get("marketCap") or 0,
-            "currency": info.get("currency") or "INR",
-            "trailingPE": info.get("trailingPE"),
-            "forwardPE": info.get("forwardPE"),
-            "dividendYield": info.get("dividendYield"),
-            "beta": info.get("beta"),
-            "fiftyTwoWeekHigh": info.get("fiftyTwoWeekHigh"),
-            "fiftyTwoWeekLow": info.get("fiftyTwoWeekLow"),
-            "regularMarketPrice": info.get("regularMarketPrice"),
-            "targetMeanPrice": info.get("targetMeanPrice"),
-            "priceToBook": info.get("priceToBook"),
-            "averageVolume": info.get("averageVolume"),
-            "website": info.get("website"),
-            "exchange": info.get("exchange") or "NSE",
-        }
+        )
+
+        if not history_close.empty:
+            profile["fiftyTwoWeekHigh"] = first_value(profile["fiftyTwoWeekHigh"], float(history_close.max()))
+            profile["fiftyTwoWeekLow"] = first_value(profile["fiftyTwoWeekLow"], float(history_close.min()))
+
+        shares_outstanding = first_value(info.get("sharesOutstanding"), info.get("impliedSharesOutstanding"))
+        if profile["marketCap"] is None and shares_outstanding is not None and profile["regularMarketPrice"] is not None:
+            profile["marketCap"] = float(shares_outstanding) * float(profile["regularMarketPrice"])
+
+        if profile["dividendYield"] is not None and float(profile["dividendYield"]) > 1:
+            profile["dividendYield"] = float(profile["dividendYield"]) / 100
+        return profile
     except Exception:
-        return {
-            "symbol": ticker,
-            "shortName": ticker.replace(".NS", ""),
-            "sector": "N/A",
-            "industry": "N/A",
-            "marketCap": 0,
-            "currency": "INR",
-        }
+        return profile
 
 
 def fetch_fii_data(limit: int = 10) -> pd.DataFrame:

@@ -39,17 +39,72 @@ st.set_page_config(page_title="NSE Stock Dashboard", layout="wide")
 st.markdown(
     """
     <style>
+    :root {
+        --ink: #17212b;
+        --muted: #52606d;
+        --line: #d8e2ea;
+        --surface: rgba(255, 255, 255, 0.92);
+        --blue-soft: #edf6ff;
+        --green-soft: #eef9f3;
+    }
+    [data-testid="stAppViewContainer"] {
+        background: linear-gradient(155deg, #f4f9fd 0%, #ffffff 48%, #f1faf6 100%);
+    }
+    [data-testid="stHeader"] {
+        background: rgba(255, 255, 255, 0.72);
+    }
+    [data-testid="stSidebar"] {
+        background: #edf6f3;
+        border-right: 1px solid #d5e5df;
+    }
+    [data-testid="stSidebar"] > div:first-child {
+        padding-top: 2rem;
+    }
+    .block-container {
+        max-width: 1440px;
+        padding-top: 2.5rem;
+        padding-bottom: 3rem;
+    }
+    h1, h2, h3 {
+        color: var(--ink);
+        letter-spacing: 0;
+    }
+    h1 {
+        font-weight: 800;
+    }
+    .stCaption, [data-testid="stCaptionContainer"] {
+        color: var(--muted);
+    }
+    [data-baseweb="tab-list"] {
+        gap: 0.35rem;
+        border-bottom: 1px solid var(--line);
+    }
+    [data-baseweb="tab"] {
+        color: var(--muted);
+        font-weight: 700;
+        padding: 0.7rem 1rem;
+    }
+    [aria-selected="true"][data-baseweb="tab"] {
+        color: #1261a0;
+        border-bottom-color: #2383c4;
+    }
+    [data-testid="stDataFrame"] {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        overflow: hidden;
+        background: var(--surface);
+    }
     .streamlit-expanderHeader { font-size: 16px; }
     .stMetric { background: #eaf4fb; border-radius: 8px; padding: 8px 10px; }
     .stMetric > div { font-size: 15px !important; }
     .stMetric .stMetricValue { font-size: 2.2rem !important; line-height: 1.2; }
     .dataframe { font-size: 15px; }
     .snapshot-card {
-        background: #eaf4fb;
+        background: var(--blue-soft);
         border-radius: 10px;
         padding: 12px 14px;
         margin: 8px 0;
-        border: 1px solid #bfd9ee;
+        border: 1px solid #c6ddec;
     }
     .snapshot-label {
         font-size: 14px;

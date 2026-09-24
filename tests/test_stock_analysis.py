@@ -1,6 +1,6 @@
 import pandas as pd
 
-from stock_analysis.analysis import generate_recommendations, summarize_stock
+from stock_analysis.analysis import analyze_institutional_trend, generate_recommendations, summarize_stock
 from stock_analysis.data import fetch_bulk_deals, fetch_fii_data, normalize_stock_symbol
 
 
@@ -53,3 +53,15 @@ def test_generate_recommendations_returns_action_and_reasons():
     assert isinstance(rec["reasons"], list)
     assert rec["confidence"] >= 0
     assert rec["confidence"] <= 100
+
+
+def test_analyze_institutional_trend_projects_direction():
+    flow = pd.DataFrame(
+        {
+            "category": ["FII/FPI"] * 6,
+            "netValue": [-100, -80, -60, 20, 40, 60],
+        }
+    )
+    trend = analyze_institutional_trend(flow, recent_window=3)
+    assert trend.iloc[0]["direction"] == "Increasing buying"
+    assert trend.iloc[0]["projected_next"] > trend.iloc[0]["recent_average"]

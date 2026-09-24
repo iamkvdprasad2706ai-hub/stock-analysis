@@ -16,6 +16,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from stock_analysis.analysis import (  # noqa: E402
+    analyze_institutional_trend,
     calculate_macd,
     calculate_moving_average,
     calculate_rsi,
@@ -379,13 +380,62 @@ if symbol_input:
             st.dataframe(display, use_container_width=True)
 
         with tab_fii:
-            fii_df = fetch_fii_data(limit=12)
+            fii_df = fetch_fii_data(limit=30)
             if fii_df.empty:
                 st.info("No recent FII/DII data is available right now.")
             else:
+                fii_df = fii_df.sort_values("date").reset_index(drop=True)
                 fii_view = fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
                 fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
                 st.dataframe(fii_view, use_container_width=True)
+
+                trend_chart = px.line(
+                    fii_df,
+                    x="date",
+                    y="netValue",
+                    color="category",
+                    markers=True,
+                    title="FII / DII Daily Net Investment Trend",
+                    template="plotly_white",
+                    labels={"date": "Date", "netValue": "Net investment (₹ crore)", "category": "Investor type"},
+                )
+                trend_chart.add_hline(y=0, line_dash="dash", line_color="#6b7280")
+                trend_chart.update_layout(hovermode="x unified")
+                st.plotly_chart(trend_chart, use_container_width=True)
+
+                cumulative = fii_df.copy()
+                cumulative["cumulativeNet"] = cumulative.groupby("category")["netValue"].cumsum()
+                cumulative_chart = px.line(
+                    cumulative,
+                    x="date",
+                    y="cumulativeNet",
+                    color="category",
+                    markers=True,
+                    title="Cumulative FII / DII Allocation",
+                    template="plotly_white",
+                    labels={"date": "Date", "cumulativeNet": "Cumulative net investment (₹ crore)", "category": "Investor type"},
+                )
+                cumulative_chart.add_hline(y=0, line_dash="dash", line_color="#6b7280")
+                cumulative_chart.update_layout(hovermode="x unified")
+                st.plotly_chart(cumulative_chart, use_container_width=True)
+
+                trend_summary = analyze_institutional_trend(fii_df)
+                st.subheader("Short-term flow outlook")
+                if trend_summary.empty:
+                    st.info("There is not enough institutional history to estimate a trend.")
+                else:
+                    outlook = trend_summary.rename(
+                        columns={
+                            "category": "Investor type",
+                            "recent_average": "Recent avg (₹ cr)",
+                            "previous_average": "Previous avg (₹ cr)",
+                            "change": "Change (₹ cr)",
+                            "direction": "Direction",
+                            "projected_next": "Projected next (₹ cr)",
+                        }
+                    )
+                    st.dataframe(outlook, use_container_width=True, hide_index=True)
+                    st.caption("Projection uses the change between the recent and previous five reported observations. It is a statistical signal, not a guaranteed forecast.")
 
                 net_flow = fii_df.groupby("category", as_index=False)["netValue"].sum()
                 flow_chart = px.bar(

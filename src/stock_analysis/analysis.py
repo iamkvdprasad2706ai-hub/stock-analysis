@@ -38,6 +38,40 @@ def calculate_macd(data: pd.DataFrame, fast: int = 12, slow: int = 26, signal: i
     return result
 
 
+def analyze_institutional_trend(fii_data: pd.DataFrame, recent_window: int = 5) -> pd.DataFrame:
+    """Summarize recent FII/DII direction and project the next net-flow reading."""
+    columns = ["category", "recent_average", "previous_average", "change", "direction", "projected_next"]
+    if fii_data.empty or not {"category", "netValue"}.issubset(fii_data.columns):
+        return pd.DataFrame(columns=columns)
+
+    clean = fii_data[["category", "netValue"]].copy()
+    clean["netValue"] = pd.to_numeric(clean["netValue"], errors="coerce")
+    clean = clean.dropna(subset=["netValue"])
+    rows = []
+    for category, group in clean.groupby("category"):
+        values = group["netValue"].reset_index(drop=True)
+        if values.empty:
+            continue
+        window = min(recent_window, len(values))
+        recent = float(values.iloc[-window:].mean())
+        previous_values = values.iloc[-2 * window:-window] if len(values) > window else values.iloc[:-window]
+        previous = float(previous_values.mean()) if not previous_values.empty else recent
+        change = recent - previous
+        direction = "Increasing buying" if change > 0 else "Increasing selling" if change < 0 else "Stable"
+        projected = recent + (change * 0.5)
+        rows.append(
+            {
+                "category": category,
+                "recent_average": round(recent, 2),
+                "previous_average": round(previous, 2),
+                "change": round(change, 2),
+                "direction": direction,
+                "projected_next": round(projected, 2),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def compute_daily_returns(data: pd.DataFrame) -> pd.Series:
     if "close" not in data.columns:
         raise ValueError("Data must include a 'close' column.")

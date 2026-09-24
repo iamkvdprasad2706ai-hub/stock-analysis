@@ -237,9 +237,11 @@ def fetch_fii_data(limit: int = 10) -> pd.DataFrame:
         return fallback
 
 
-def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
+def fetch_screener_fii_dii_top_stocks(limit: int = 10, page: int = 1) -> pd.DataFrame:
     """Fetch the linked Screener.in FII/DII buying screen and return its top rows."""
     url = "https://www.screener.in/screens/1340210/fii-and-dii-buying-stocks/"
+    if page > 1:
+        url = f"{url}?page={page}"
     empty_columns = ["Symbol", "Company", "CMP (Rs.)", "P/E", "Market Cap (Rs. Cr)", "ROCE (%)", "FII change (%)", "DII change (%)"]
     try:
         response = requests.get(
@@ -276,6 +278,20 @@ def fetch_screener_fii_dii_top_stocks(limit: int = 10) -> pd.DataFrame:
         return result.reset_index(drop=True)
     except Exception:
         return pd.DataFrame(columns=empty_columns)
+
+
+def fetch_screener_fii_dii_penny_stocks(limit: int = 10) -> pd.DataFrame:
+    """Return low-priced stocks from all pages of the linked FII/DII screen."""
+    pages = [fetch_screener_fii_dii_top_stocks(limit=100, page=page) for page in range(1, 5)]
+    candidates = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
+    if candidates.empty or "CMP (Rs.)" not in candidates.columns:
+        return pd.DataFrame(columns=candidates.columns if not candidates.empty else ["Symbol", "Company", "CMP (Rs.)"])
+    candidates["CMP (Rs.)"] = pd.to_numeric(candidates["CMP (Rs.)"], errors="coerce")
+    candidates["FII change (%)"] = pd.to_numeric(candidates["FII change (%)"], errors="coerce")
+    candidates["DII change (%)"] = pd.to_numeric(candidates["DII change (%)"], errors="coerce")
+    penny = candidates[candidates["CMP (Rs.)"].le(10)].copy()
+    penny["Combined ownership change (%)"] = penny["FII change (%)"].fillna(0) + penny["DII change (%)"].fillna(0)
+    return penny.sort_values("Combined ownership change (%)", ascending=False).head(limit).reset_index(drop=True)
 
 
 def fetch_bulk_deals(limit: int = 10) -> pd.DataFrame:

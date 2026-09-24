@@ -30,6 +30,7 @@ from stock_analysis.data import (  # noqa: E402
     fetch_bulk_deals,
     fetch_fii_data,
     fetch_stock_profile,
+    fetch_screener_fii_dii_penny_stocks,
     fetch_screener_fii_dii_top_stocks,
     load_stock_data,
     normalize_stock_symbol,
@@ -283,6 +284,20 @@ if symbol_input:
                     st.dataframe(market_ideas, width="stretch", hide_index=True)
                     st.caption("Entry is the latest available price. Targets and stop loss are model levels for a 2-6 week horizon, not personalized financial advice.")
                     st.warning("Global macro events are not automatically verified in this dashboard. Review current news, sector conditions, and exchange disclosures before acting.")
+
+            st.subheader("Top 10 penny-stock ideas")
+            st.caption("Same FII/DII screen, filtered to CMP ≤ ₹10. These are high-risk candidates and may have limited liquidity.")
+            penny_stocks = fetch_screener_fii_dii_penny_stocks(limit=10)
+            if penny_stocks.empty:
+                st.info("No stocks priced at ₹10 or below currently match the linked Screener.in FII/DII buying criteria. The table will populate when qualifying stocks appear.")
+            else:
+                penny_history = {}
+                with st.spinner("Calculating penny-stock setups..."):
+                    for penny_symbol in penny_stocks["Symbol"].dropna().astype(str):
+                        penny_history[penny_symbol.upper()] = load_stock_data(penny_symbol, period="6mo")
+                penny_ideas = build_market_ideas(penny_stocks, penny_history, macro_risk=macro_risk)
+                st.dataframe(penny_ideas, width="stretch", hide_index=True)
+                st.caption("Penny-stock trade levels are especially sensitive to liquidity, spreads, price manipulation, and sudden gaps.")
             st.stop()
 
         if workspace == "Market screener":

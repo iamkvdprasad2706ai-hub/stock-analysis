@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import datetime
 from typing import Any
 
 import pandas as pd
@@ -136,6 +137,15 @@ st.markdown(
         color: #3f4d5a;
         line-height: 1.5;
     }
+    .status-strip {
+        border: 1px solid #d6dee7;
+        border-radius: 8px;
+        padding: 8px 12px;
+        background: #f8fafc;
+        color: #52606d;
+        font-size: 13px;
+        margin: 8px 0 16px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -179,6 +189,9 @@ def display_value(value: Any, formatter=format_currency) -> str:
 st.title("NSE Stock Analysis Dashboard")
 st.caption("Enter a stock name or ticker to load its NSE market data and key indicators.")
 
+workspace = st.sidebar.radio("Workspace", ["Stock workspace", "Market screener"], index=0)
+st.sidebar.caption("Use Stock workspace for chart and trade ideas. Use Market screener for FII/DII discovery.")
+
 symbol_input = st.text_input("Stock name or ticker", value="Reliance")
 period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
 
@@ -196,15 +209,34 @@ if symbol_input:
         summary = summarize_stock(data)
 
         top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
-        st.subheader("Top 10 FII and DII buying stocks")
-        st.caption("Screener.in screen: FII holding change > 0.3%, DII holding change > 0.3%, market cap > ₹1,000 crore.")
+        if workspace == "Market screener":
+            st.subheader("Market screener")
+            st.caption("Screener.in screen: FII holding change > 0.3%, DII holding change > 0.3%, market cap > ₹1,000 crore.")
+            screener_filter = st.text_input("Filter companies", placeholder="Search company name")
+            if top_stocks.empty:
+                st.info("The Screener.in top-10 list is temporarily unavailable.")
+            else:
+                screener_view = top_stocks.copy()
+                if screener_filter:
+                    screener_view = screener_view[screener_view["Company"].str.contains(screener_filter, case=False, na=False)]
+                st.dataframe(screener_view, width="stretch", hide_index=True)
+            st.caption("Source: Screener.in screen 1340210. Values may be delayed and should be verified before trading.")
+            st.stop()
+
+        st.subheader("Stock overview")
         if top_stocks.empty:
             st.info("The Screener.in top-10 list is temporarily unavailable.")
         else:
-            st.dataframe(top_stocks, use_container_width=True, hide_index=True)
+            with st.expander("Top 10 FII and DII buying stocks", expanded=False):
+                st.dataframe(top_stocks, width="stretch", hide_index=True)
 
         st.subheader(f"{profile.get('longName') or profile.get('shortName') or ticker}")
         st.caption(f"{ticker} • {profile.get('sector') or 'N/A'} • {profile.get('industry') or 'N/A'}")
+        st.markdown(
+            f"<div class='status-strip'><strong>Data status:</strong> Yahoo Finance price/profile feed &nbsp;|&nbsp; "
+            f"<strong>Period:</strong> {period} &nbsp;|&nbsp; <strong>Updated:</strong> {datetime.now().strftime('%d-%b-%Y %H:%M')}</div>",
+            unsafe_allow_html=True,
+        )
 
         def color_value(raw_value: str, numeric_value: float | None = None) -> str:
             if numeric_value is None:
@@ -233,19 +265,32 @@ if symbol_input:
             dividend_text = f"{float(dividend_yield) * 100:.2f}%" if dividend_yield is not None else "N/A"
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Dividend yield</div><div class='snapshot-value'>{dividend_text}</div></div>", unsafe_allow_html=True)
 
-        portfolio_df = pd.DataFrame(
-            {
-                "Portfolio Item": ["Invested value", "Current value", "P/L", "Action"],
-                "Value": [
-                    "₹1,00,000",
-                    f"₹{(summary['latest_close'] * 80):,.0f}",
-                    f"₹{(summary['latest_close'] * 80 - 100000):,.0f}",
-                    "Hold",
-                ],
-            }
-        )
-        st.markdown("### Compact portfolio summary")
-        st.dataframe(portfolio_df, use_container_width=True, hide_index=True)
+        with st.expander("Portfolio position", expanded=False):
+            portfolio_col1, portfolio_col2 = st.columns(2)
+            with portfolio_col1:
+                shares = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0)
+            with portfolio_col2:
+                average_buy_price = st.number_input("Average buy price (₹)", min_value=0.0, value=0.0, step=0.05)
+
+            if shares > 0 and average_buy_price > 0:
+                invested_value = shares * average_buy_price
+                current_value = shares * summary["latest_close"]
+                profit_loss = current_value - invested_value
+                return_pct = (profit_loss / invested_value) * 100
+                portfolio_df = pd.DataFrame(
+                    {
+                        "Portfolio item": ["Invested value", "Current value", "P/L", "Return"],
+                        "Value": [
+                            format_currency(invested_value),
+                            format_currency(current_value),
+                            format_currency(profit_loss),
+                            f"{return_pct:+.2f}%",
+                        ],
+                    }
+                )
+                st.dataframe(portfolio_df, width="stretch", hide_index=True)
+            else:
+                st.info("Enter quantity and average buy price to calculate your real position value and return.")
 
         tab_prices, tab_profile, tab_stats, tab_table, tab_fii, tab_bulk, tab_reco = st.tabs(["Price charts", "Company profile", "Valuation & stats", "Data table", "FII / DII", "Bulk deals", "Recommendations"])
 
@@ -302,7 +347,7 @@ if symbol_input:
                 legend={"orientation": "h", "y": 1.02, "x": 0},
                 margin={"l": 55, "r": 25, "t": 90, "b": 35},
             )
-            st.plotly_chart(technical_chart, use_container_width=True)
+            st.plotly_chart(technical_chart, width="stretch")
 
             candlestick = go.Figure(
                 data=[
@@ -319,19 +364,19 @@ if symbol_input:
                 ]
             )
             candlestick.update_layout(title=f"{ticker} Candlestick Chart", xaxis_title="Date", yaxis_title="Price", template="plotly_white")
-            st.plotly_chart(candlestick, use_container_width=True)
+            st.plotly_chart(candlestick, width="stretch")
 
             price_chart = go.Figure()
             price_chart.add_trace(go.Scatter(x=data["date"], y=data["close"], mode="lines", name="Close", line=dict(color="#2563eb", width=2)))
             price_chart.add_trace(go.Scatter(x=data["date"], y=data["ma_20"], mode="lines", name="20-day MA", line=dict(color="#f59e0b", dash="dash")))
             price_chart.add_trace(go.Scatter(x=data["date"], y=data["ma_50"], mode="lines", name="50-day MA", line=dict(color="#10b981", dash="dot")))
             price_chart.update_layout(title=f"{ticker} Price Trend", xaxis_title="Date", yaxis_title="Price", template="plotly_white")
-            st.plotly_chart(price_chart, use_container_width=True)
+            st.plotly_chart(price_chart, width="stretch")
 
             volume_chart = px.bar(data, x="date", y="volume", title=f"{ticker} Trading Volume", template="plotly_white")
             volume_chart.update_xaxes(title="Date")
             volume_chart.update_yaxes(title="Volume")
-            st.plotly_chart(volume_chart, use_container_width=True)
+            st.plotly_chart(volume_chart, width="stretch")
 
         with tab_profile:
             st.markdown(
@@ -356,7 +401,7 @@ if symbol_input:
             hist = px.histogram(returns_pct, nbins=25, title=f"{ticker} Daily Return Distribution", template="plotly_white")
             hist.update_xaxes(title="Daily return (%)")
             hist.update_yaxes(title="Count")
-            st.plotly_chart(hist, use_container_width=True)
+            st.plotly_chart(hist, width="stretch")
 
         with tab_stats:
             metrics = {
@@ -372,7 +417,7 @@ if symbol_input:
                 "Average Volume": profile.get("averageVolume"),
             }
             stats_df = pd.DataFrame({"Metric": list(metrics.keys()), "Value": list(metrics.values())})
-            st.dataframe(stats_df, use_container_width=True)
+            st.dataframe(stats_df, width="stretch")
 
             fig = px.scatter(
                 x=data["close"],
@@ -381,12 +426,12 @@ if symbol_input:
                 labels={"x": "Close Price", "y": "Volume"},
                 template="plotly_white",
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with tab_table:
             display = data.tail(20)[["date", "open", "high", "low", "close", "volume"]].copy()
             display["date"] = display["date"].dt.strftime("%Y-%m-%d")
-            st.dataframe(display, use_container_width=True)
+            st.dataframe(display, width="stretch")
 
         with tab_fii:
             fii_df = fetch_fii_data(limit=30)
@@ -401,7 +446,7 @@ if symbol_input:
 
                 fii_view = recent_fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
                 fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
-                st.dataframe(fii_view, use_container_width=True)
+                st.dataframe(fii_view, width="stretch")
 
                 trend_summary = analyze_institutional_trend(recent_fii_df, recent_window=3)
                 st.subheader("Short-term flow outlook")
@@ -418,7 +463,7 @@ if symbol_input:
                             "projected_next": "Projected next (₹ cr)",
                         }
                     )
-                    st.dataframe(outlook, use_container_width=True, hide_index=True)
+                    st.dataframe(outlook, width="stretch", hide_index=True)
                     st.caption("Projection uses the change between the recent and previous five reported observations. It is a statistical signal, not a guaranteed forecast.")
 
                 total_net = recent_fii_df["netValue"].sum()
@@ -432,7 +477,7 @@ if symbol_input:
             else:
                 bulk_view = bulk_df.copy()
                 bulk_view["Date"] = bulk_view["Date"].dt.strftime("%d-%b-%Y")
-                st.dataframe(bulk_view[["Date", "Symbol", "Security Name", "Client Name", "Buy/Sell", "Quantity Traded", "Trade Price / Wght. Avg. Price", "Remarks"]], use_container_width=True)
+                st.dataframe(bulk_view[["Date", "Symbol", "Security Name", "Client Name", "Buy/Sell", "Quantity Traded", "Trade Price / Wght. Avg. Price", "Remarks"]], width="stretch")
 
                 buy_sell = bulk_df["Buy/Sell"].value_counts().reset_index()
                 buy_sell.columns = ["Action", "Count"]
@@ -445,7 +490,7 @@ if symbol_input:
                     template="plotly_white",
                 )
                 bulk_chart.update_layout(showlegend=False)
-                st.plotly_chart(bulk_chart, use_container_width=True)
+                st.plotly_chart(bulk_chart, width="stretch")
 
         with tab_reco:
             fii_df = fetch_fii_data(limit=12)
@@ -464,12 +509,16 @@ if symbol_input:
                 target_2 = legacy_target or round(entry_price * 1.08, 2)
                 targets = [round(entry_price * 1.04, 2), target_2, round(entry_price * 1.12, 2)]
             stop_loss = recommendation.get("stop_loss") or round(entry_price * 0.92, 2)
+            risk_per_share = entry_price - stop_loss
+            reward_per_share = targets[2] - entry_price
+            risk_reward = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
+            holding_style = "Swing / positional" if period in {"3mo", "6mo", "1y", "2y", "5y"} else "Short-term"
 
             st.markdown(
                 f"<div class='recommendation-header'>"
                 f"<div class='recommendation-label'>Trading view</div>"
                 f"<div class='recommendation-action {action_class}'>{action}</div>"
-                f"<div class='trade-note'>Confidence: {recommendation.get('confidence', 0)}% &nbsp; | &nbsp; Risk: {recommendation.get('risk_level', 'Unknown')}</div>"
+                f"<div class='trade-note'>Confidence: {recommendation.get('confidence', 0)}% &nbsp; | &nbsp; Risk: {recommendation.get('risk_level', 'Unknown')} &nbsp; | &nbsp; Style: {holding_style}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -508,7 +557,7 @@ if symbol_input:
                 f"<div class='summary-card'>"
                 f"<div class='summary-title'>Summary</div>"
                 f"<div class='summary-text'><strong class='{action_class}'>{action}</strong> view at <strong>{summary_price_text}</strong>.</div>"
-                f"<div class='trade-note'><strong>Price change:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow}</div>"
+                f"<div class='trade-note'><strong>Price change:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow} &nbsp; | &nbsp; <strong>Risk/reward:</strong> 1:{risk_reward:.2f}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )

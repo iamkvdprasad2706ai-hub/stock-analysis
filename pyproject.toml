@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stock-analysis"
 version = "0.1.0"
-description = "NSE stock analysis workspace"
+description = "NSE and BSE stock analysis workspace"
 requires-python = ">=3.11"
 dependencies = [
   "streamlit>=1.39.0",

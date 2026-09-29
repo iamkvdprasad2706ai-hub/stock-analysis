@@ -4,6 +4,7 @@ import io
 import math
 import os
 import re
+import xml.etree.ElementTree as ET
 import warnings
 from datetime import datetime
 
@@ -53,24 +54,29 @@ def get_optional_ai_summary(stock_name: str, summary: dict, profile: dict | None
     return response.output_text.strip() if hasattr(response, "output_text") else str(response)
 
 
-def normalize_stock_symbol(raw_symbol: str) -> str:
-    """Normalize a stock ticker or company name into an NSE-style Yahoo Finance symbol."""
+def normalize_stock_symbol(raw_symbol: str, exchange: str = "NSE") -> str:
+    """Normalize a stock ticker or company name into a Yahoo Finance symbol."""
     if raw_symbol is None:
         raise ValueError("Stock symbol or name is required.")
+
+    exchange_suffixes = {"NSE": ".NS", "BSE": ".BO"}
+    exchange_name = str(exchange).strip().upper()
+    if exchange_name not in exchange_suffixes:
+        raise ValueError("Exchange must be either 'NSE' or 'BSE'.")
 
     cleaned = str(raw_symbol).strip()
     if not cleaned:
         raise ValueError("Stock symbol or name is required.")
 
-    if "." in cleaned:
-        candidate = cleaned.upper()
-        return candidate if candidate.endswith(".NS") else f"{candidate}.NS"
+    candidate = cleaned.upper()
+    if candidate.endswith((".NS", ".BO")):
+        return candidate
 
-    candidate = re.sub(r"[^A-Z0-9\s\-]", "", cleaned.upper())
+    candidate = re.sub(r"[^A-Z0-9\s\-]", "", candidate)
     base = re.split(r"[\s\-/]+", candidate.strip())[0]
     if not base:
         raise ValueError("Could not infer a stock symbol from the provided value.")
-    return f"{base}.NS"
+    return f"{base}{exchange_suffixes[exchange_name]}"
 
 
 def _build_sample_data(symbol: str) -> pd.DataFrame:
@@ -98,12 +104,16 @@ def _build_sample_data(symbol: str) -> pd.DataFrame:
     return sample
 
 
-def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
-    """Load NSE stock OHLC data and fall back to generated sample data when the market feed is unavailable."""
-    ticker = normalize_stock_symbol(symbol)
+def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d", exchange: str = "NSE") -> pd.DataFrame:
+    """Load stock OHLC data, supporting custom year lookbacks up to Yahoo's available history."""
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
 
     try:
-        history = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+        years_match = re.fullmatch(r"(\d+)y", period)
+        history_options = {"period": period} if years_match is None else {
+            "start": datetime.today() - pd.DateOffset(years=int(years_match.group(1)))
+        }
+        history = yf.Ticker(ticker).history(interval=interval, auto_adjust=True, **history_options)
         if history.empty:
             raise ValueError(f"No data found for symbol {ticker}.")
 
@@ -122,13 +132,100 @@ def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d") -> pd
         )
     except Exception:
         sample = _build_sample_data(ticker)
+        sample.attrs["synthetic"] = True
         return sample
 
 
-def fetch_stock_profile(symbol: str) -> dict:
+def fetch_stock_sector(symbol: str, exchange: str = "NSE") -> str:
+    """Return Yahoo Finance's sector classification without downloading price history."""
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
+    try:
+        info = yf.Ticker(ticker).info or {}
+        return str(info.get("sector") or "Unclassified")
+    except Exception:
+        return "Unclassified"
+
+
+def fetch_market_context() -> pd.DataFrame:
+    """Fetch one-year trend snapshots for Indian and major global market indicators."""
+    indicators = {
+        "NIFTY 50": "^NSEI",
+        "S&P 500": "^GSPC",
+        "NASDAQ Composite": "^IXIC",
+        "CBOE VIX": "^VIX",
+        "Gold": "GC=F",
+        "Crude oil": "CL=F",
+        "USD/INR": "INR=X",
+    }
+    rows = []
+    for name, ticker in indicators.items():
+        try:
+            history = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
+            close = pd.to_numeric(history.get("Close"), errors="coerce").dropna()
+            if close.empty:
+                continue
+            latest = float(close.iloc[-1])
+            year_return = (latest / float(close.iloc[0]) - 1) * 100 if len(close) > 1 else 0.0
+            average_200d = float(close.tail(200).mean())
+            trend = "Bullish" if latest >= average_200d else "Bearish"
+            rows.append(
+                {
+                    "Market": name,
+                    "Latest": latest,
+                    "One-year return (%)": round(year_return, 2),
+                    "Trend vs 200-day average": trend,
+                    "Ticker": ticker,
+                }
+            )
+        except Exception:
+            continue
+    return pd.DataFrame(rows, columns=["Market", "Latest", "One-year return (%)", "Trend vs 200-day average", "Ticker"])
+
+
+def fetch_market_news(limit: int = 5) -> pd.DataFrame:
+    """Fetch source-linked India policy and global market headlines for human review."""
+    columns = ["Topic", "Headline", "Source", "Published", "URL"]
+    topics = {
+        "India policy and economy": "India government policy economy development markets",
+        "Global markets and geopolitics": "global markets geopolitics trade policy economy",
+    }
+    rows = []
+    for topic, query in topics.items():
+        try:
+            response = requests.get(
+                "https://news.google.com/rss/search",
+                params={"q": query, "hl": "en-IN", "gl": "IN", "ceid": "IN:en"},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; StockAnalysisDashboard/1.0)"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            for item in root.findall("./channel/item")[:limit]:
+                source = item.find("source")
+                rows.append(
+                    {
+                        "Topic": topic,
+                        "Headline": item.findtext("title", default=""),
+                        "Source": source.text if source is not None and source.text else "News source",
+                        "Published": item.findtext("pubDate", default=""),
+                        "URL": item.findtext("link", default=""),
+                    }
+                )
+        except Exception:
+            continue
+    return pd.DataFrame(rows, columns=columns)
+
+
+def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
     """Retrieve a complete, normalized market profile with resilient Yahoo fallbacks."""
-    ticker = normalize_stock_symbol(symbol)
-    symbol_name = ticker.replace(".NS", "")
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
+    symbol_name = ticker.rsplit(".", 1)[0]
+    exchange_name = "BSE" if ticker.endswith(".BO") else "NSE"
+    website = (
+        f"https://www.bseindia.com/stock-share-price/{symbol_name}/"
+        if exchange_name == "BSE"
+        else f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}"
+    )
     profile = {
         "symbol": ticker,
         "shortName": symbol_name,
@@ -148,8 +245,8 @@ def fetch_stock_profile(symbol: str) -> dict:
         "bookValue": None,
         "priceToBook": None,
         "averageVolume": None,
-        "website": f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}",
-        "exchange": "NSE",
+        "website": website,
+        "exchange": exchange_name,
     }
 
     def first_value(*values):
@@ -191,7 +288,7 @@ def fetch_stock_profile(symbol: str) -> dict:
                 "priceToBook": first_value(info.get("priceToBook")),
                 "averageVolume": first_value(info.get("averageVolume"), fast_info.get("three_month_average_volume")),
                 "website": first_value(info.get("website"), profile["website"]),
-                "exchange": first_value(info.get("exchange"), "NSE"),
+                "exchange": exchange_name,
             }
         )
 

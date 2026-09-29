@@ -29,14 +29,16 @@ from stock_analysis.analysis import (  # noqa: E402
 from stock_analysis.data import (  # noqa: E402
     fetch_bulk_deals,
     fetch_fii_data,
+    fetch_market_context,
+    fetch_market_news,
     fetch_stock_profile,
-    fetch_screener_fii_dii_penny_stocks,
+    fetch_stock_sector,
     fetch_screener_fii_dii_top_stocks,
     load_stock_data,
     normalize_stock_symbol,
 )
 
-st.set_page_config(page_title="NSE Stock Dashboard", layout="wide")
+st.set_page_config(page_title="Indian Stock Dashboard", layout="wide")
 
 st.markdown(
     """
@@ -243,20 +245,46 @@ def display_value(value: Any, formatter=format_currency) -> str:
     return formatter(value)
 
 
-st.title("NSE Stock Analysis Dashboard")
-st.caption("Enter a stock name or ticker to load its NSE market data and key indicators.")
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_stock_history(symbol: str, period: str, exchange: str) -> pd.DataFrame:
+    return load_stock_data(symbol=symbol, period=period, exchange=exchange)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def cached_stock_sector(symbol: str, exchange: str) -> str:
+    return fetch_stock_sector(symbol, exchange=exchange)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_screener_page(limit: int, page: int) -> pd.DataFrame:
+    return fetch_screener_fii_dii_top_stocks(limit=limit, page=page)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_market_context() -> pd.DataFrame:
+    return fetch_market_context()
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_market_news() -> pd.DataFrame:
+    return fetch_market_news()
+
+
+st.title("Indian Stock Analysis Dashboard")
+st.caption("Analyze listed stocks on the National Stock Exchange or Bombay Stock Exchange.")
 
 workspace = st.sidebar.radio("Workspace", ["Stock workspace", "Market screener", "Market ideas"], index=0)
 st.sidebar.caption("Stock workspace: charts and trade ideas. Market screener: discovery. Market ideas: ranked setups.")
 
+exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
 symbol_input = st.text_input("Stock name or ticker", value="Reliance")
-period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y"], index=3)
+period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
 
 if symbol_input:
     try:
-        ticker = normalize_stock_symbol(symbol_input)
-        profile = fetch_stock_profile(symbol_input)
-        data = load_stock_data(symbol=ticker, period=period)
+        ticker = normalize_stock_symbol(symbol_input, exchange=exchange)
+        profile = fetch_stock_profile(symbol_input, exchange=exchange)
+        data = cached_stock_history(ticker, period, exchange)
         data = data.sort_values("date").reset_index(drop=True)
         data = calculate_moving_average(data, window=20)
         data = calculate_moving_average(data, window=50)
@@ -267,37 +295,97 @@ if symbol_input:
 
         top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
         if workspace == "Market ideas":
-            st.subheader("Top 10 market ideas")
-            st.caption("Ranked from the Screener.in FII/DII buying universe using trend, RSI, volume confirmation, ownership change, and risk/reward.")
-            macro_risk = st.selectbox("Macro-risk overlay", ["Neutral", "Elevated", "High"], help="Manual risk adjustment for geopolitical, trade-policy, war, and natural-disaster uncertainty. It is not a live event feed.")
+            st.subheader("Sector-ranked market ideas")
+            st.caption("Top three eligible stocks per sector from the Screener.in FII/DII universe, ranked using current market conditions and up to 15 years of price history.")
+            macro_risk = st.selectbox("Manual event-risk overlay", ["Neutral", "Elevated", "High"], help="Applies a manual penalty for political, geopolitical, trade-policy, or other event risk. Headlines below are context, not automatically scored.")
             if top_stocks.empty or "Symbol" not in top_stocks.columns:
                 st.info("The market-ideas universe is temporarily unavailable.")
             else:
-                idea_history = {}
-                with st.spinner("Calculating technical setups for the top-10 universe..."):
-                    for idea_symbol in top_stocks["Symbol"].dropna().astype(str):
-                        idea_history[idea_symbol.upper()] = load_stock_data(idea_symbol, period="6mo")
-                market_ideas = build_market_ideas(top_stocks, idea_history, macro_risk=macro_risk)
+                with st.spinner("Loading sector classifications and long-term stock histories..."):
+                    screen_pages = [cached_screener_page(limit=100, page=page) for page in range(1, 5)]
+                    idea_candidates = pd.concat(screen_pages, ignore_index=True).drop_duplicates("Symbol")
+                    idea_candidates["Sector"] = [
+                        cached_stock_sector(symbol, exchange)
+                        for symbol in idea_candidates["Symbol"].dropna().astype(str)
+                    ]
+                    idea_history = {
+                        symbol.upper(): cached_stock_history(symbol, "15y", exchange)
+                        for symbol in idea_candidates["Symbol"].dropna().astype(str)
+                    }
+                    market_context = cached_market_context()
+                    market_ideas = build_market_ideas(
+                        idea_candidates,
+                        idea_history,
+                        macro_risk=macro_risk,
+                        market_context=market_context,
+                    )
                 if market_ideas.empty:
-                    st.warning("Price history was unavailable for the screened stocks.")
+                    st.warning("No sectors had three or more classified stocks with real price history. Try again later or review the screen source availability.")
                 else:
-                    st.dataframe(market_ideas, width="stretch", hide_index=True)
-                    st.caption("Entry is the latest available price. Targets and stop loss are model levels for a 2-6 week horizon, not personalized financial advice.")
-                    st.warning("Global macro events are not automatically verified in this dashboard. Review current news, sector conditions, and exchange disclosures before acting.")
+                    for sector in market_ideas["Sector"].drop_duplicates():
+                        sector_rows = market_ideas[market_ideas["Sector"] == sector]
+                        sector_rank = int(sector_rows["Sector rank"].iloc[0])
+                        sector_trend = sector_rows["Sector trend"].iloc[0]
+                        st.markdown(f"#### {sector_rank}. {sector} · {sector_trend} trend")
+                        st.dataframe(
+                            sector_rows.drop(columns=["Sector rank", "Sector", "Sector trend"]),
+                            width="stretch",
+                            hide_index=True,
+                        )
+                    if market_ideas.attrs.get("underfilled_sectors"):
+                        st.warning("Omitted sectors with fewer than three eligible candidates: " + ", ".join(market_ideas.attrs["underfilled_sectors"]))
+                    excluded = market_ideas.attrs.get("unclassified_count", 0) + market_ideas.attrs.get("rejected_history_count", 0)
+                    if excluded:
+                        st.caption(f"Excluded {excluded} candidates with missing sector classification or genuine price history.")
+                    st.caption("History coverage varies by listing date and data availability. Entry, targets, and stop loss are model levels, not personalized financial advice.")
 
-            st.subheader("Top 10 penny-stock ideas")
-            st.caption("Ten lower-priced stocks from the same FII/DII screen, with no fixed ₹10 cap. These are high-risk candidates and may have limited liquidity.")
-            penny_stocks = fetch_screener_fii_dii_penny_stocks(limit=10)
-            if penny_stocks.empty:
-                st.info("Lower-priced candidates are temporarily unavailable from the linked Screener.in screen.")
-            else:
-                penny_history = {}
-                with st.spinner("Calculating penny-stock setups..."):
-                    for penny_symbol in penny_stocks["Symbol"].dropna().astype(str):
-                        penny_history[penny_symbol.upper()] = load_stock_data(penny_symbol, period="6mo")
-                penny_ideas = build_market_ideas(penny_stocks, penny_history, macro_risk=macro_risk)
-                st.dataframe(penny_ideas, width="stretch", hide_index=True)
-                st.caption("Penny-stock trade levels are especially sensitive to liquidity, spreads, price manipulation, and sudden gaps.")
+                st.subheader("Indian and global market context")
+                if market_context.empty:
+                    st.info("Market indicators are temporarily unavailable.")
+                else:
+                    st.dataframe(market_context.drop(columns=["Ticker"]), width="stretch", hide_index=True)
+
+                st.subheader("India policy and global developments")
+                market_news = cached_market_news()
+                if market_news.empty:
+                    st.info("Headline feed is temporarily unavailable. Political and geopolitical event risk remains a manual input above.")
+                else:
+                    for topic, headlines in market_news.groupby("Topic", sort=False):
+                        st.markdown(f"**{topic}**")
+                        for _, headline in headlines.iterrows():
+                            st.markdown(
+                                f"- [{headline['Headline']}]({headline['URL']}) · {headline['Source']} · {headline['Published']}"
+                            )
+                st.caption("Market indicators affect the ranking mechanically. Headlines are linked for review and are not treated as verified causal signals or automatically scored sentiment.")
+
+                st.subheader("Lower-priced sector ideas")
+                if "CMP (Rs.)" in idea_candidates.columns:
+                    penny_stocks = idea_candidates.dropna(subset=["CMP (Rs.)"]).nsmallest(30, "CMP (Rs.)")
+                    penny_history = {
+                        symbol.upper(): idea_history[symbol.upper()]
+                        for symbol in penny_stocks["Symbol"].astype(str)
+                        if symbol.upper() in idea_history
+                    }
+                    penny_ideas = build_market_ideas(
+                        penny_stocks,
+                        penny_history,
+                        macro_risk=macro_risk,
+                        market_context=market_context,
+                    )
+                    if penny_ideas.empty:
+                        st.info("Fewer than three eligible lower-priced stocks were available in each classified sector.")
+                    else:
+                        for sector in penny_ideas["Sector"].drop_duplicates():
+                            sector_rows = penny_ideas[penny_ideas["Sector"] == sector]
+                            sector_rank = int(sector_rows["Sector rank"].iloc[0])
+                            sector_trend = sector_rows["Sector trend"].iloc[0]
+                            st.markdown(f"#### {sector_rank}. {sector} · {sector_trend} trend")
+                            st.dataframe(
+                                sector_rows.drop(columns=["Sector rank", "Sector", "Sector trend"]),
+                                width="stretch",
+                                hide_index=True,
+                            )
+                        st.caption("Lower-priced stocks can carry elevated liquidity, spread, and gap risks.")
             st.stop()
 
         if workspace == "Market screener":
@@ -480,12 +568,12 @@ if symbol_input:
 
                 **Exchange**: {profile.get('exchange') or 'NSE'}
 
-                **Company / NSE website**: {profile.get('website') or 'NSE quote page'}
+                **Company / exchange website**: {profile.get('website') or 'Exchange quote page'}
                 """
             )
 
             if profile.get("website"):
-                st.markdown(f"[Open company / NSE website]({profile.get('website')})")
+                st.markdown(f"[Open company / exchange website]({profile.get('website')})")
 
             st.subheader("Daily return distribution")
             returns_pct = returns * 100
@@ -586,24 +674,26 @@ if symbol_input:
         with tab_reco:
             fii_df = fetch_fii_data(limit=12)
             bulk_df = fetch_bulk_deals(limit=12)
-            recommendation = generate_recommendations(data, profile=profile, fii_df=fii_df, bulk_df=bulk_df)
+            recommendation_history = cached_stock_history(ticker, "15y", exchange)
+            recommendation = generate_recommendations(recommendation_history, profile=profile, fii_df=fii_df, bulk_df=bulk_df)
+            st.caption("Recommendation signals use up to 15 years of available price history; the chart range above does not change this lookback.")
 
             st.subheader(f"{profile.get('longName') or profile.get('shortName') or ticker}")
 
             action = str(recommendation.get("action", "HOLD")).upper()
             action_class = {"BUY": "action-buy", "SELL": "action-sell"}.get(action, "action-hold")
-            entry_price = recommendation.get("entry_price") or summary["latest_close"]
-            partial_entry = recommendation.get("entry_partial_price") or round(entry_price * 0.95, 2)
+            entry_price = recommendation.get("entry_price")
+            partial_entry = recommendation.get("entry_partial_price")
             targets = recommendation.get("target_prices") or []
-            if len(targets) < 3 or any(level is None for level in targets[:3]):
+            if entry_price is not None and (len(targets) < 3 or any(level is None for level in targets[:3])):
                 legacy_target = recommendation.get("target_price")
                 target_2 = legacy_target or round(entry_price * 1.08, 2)
                 targets = [round(entry_price * 1.04, 2), target_2, round(entry_price * 1.12, 2)]
-            stop_loss = recommendation.get("stop_loss") or round(entry_price * 0.92, 2)
-            risk_per_share = entry_price - stop_loss
-            reward_per_share = targets[2] - entry_price
+            stop_loss = recommendation.get("stop_loss")
+            risk_per_share = entry_price - stop_loss if entry_price is not None and stop_loss is not None else 0.0
+            reward_per_share = targets[2] - entry_price if entry_price is not None and len(targets) >= 3 else 0.0
             risk_reward = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
-            holding_style = "Swing / positional" if period in {"3mo", "6mo", "1y", "2y", "5y"} else "Short-term"
+            holding_style = "Long-term analysis"
 
             st.markdown(
                 f"<div class='recommendation-header'>"
@@ -635,7 +725,7 @@ if symbol_input:
                 with stop_col:
                     st.markdown(f"<div class='trade-card stop-card'><div class='trade-label'>Stop loss</div>{stop_html}</div>", unsafe_allow_html=True)
             else:
-                st.warning("Entry, target, and stop-loss levels are unavailable because the market data is incomplete.")
+                st.warning("Entry, target, and stop-loss levels are unavailable because genuine 15-year market data could not be loaded.")
 
             summary_change = recommendation.get("price_change")
             summary_change_text = f"{summary_change:+.2f}%" if summary_change is not None else "N/A"
@@ -648,7 +738,7 @@ if symbol_input:
                 f"<div class='summary-card'>"
                 f"<div class='summary-title'>Summary</div>"
                 f"<div class='summary-text'><strong class='{action_class}'>{action}</strong> view at <strong>{summary_price_text}</strong>.</div>"
-                f"<div class='trade-note'><strong>Price change:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow} &nbsp; | &nbsp; <strong>Risk/reward:</strong> 1:{risk_reward:.2f}</div>"
+                f"<div class='trade-note'><strong>One-year return:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow} &nbsp; | &nbsp; <strong>Risk/reward:</strong> 1:{risk_reward:.2f}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )

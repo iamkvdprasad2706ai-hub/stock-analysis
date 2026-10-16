@@ -133,6 +133,12 @@ def build_market_ideas(
 
     ideas = []
     macro_penalty = {"Neutral": 0, "Elevated": 8, "High": 15}.get(macro_risk, 0)
+    risk_profiles = {
+        "Neutral": None,
+        "Elevated": (0.5, 0.2),
+        "High": (0.15, 0.1),
+    }
+    risk_profile = risk_profiles.get(macro_risk)
     market_adjustment = 0
     if market_context is not None and not market_context.empty:
         broad_indices = market_context[market_context["Market"].isin(["NIFTY 50", "S&P 500", "NASDAQ Composite"])]
@@ -277,6 +283,28 @@ def build_market_ideas(
         return result
 
     candidates = pd.DataFrame(ideas)
+    if risk_profile:
+        target_risk, quality_weight = risk_profile
+        volatility_risk = candidates.groupby("Sector")["Annualized volatility (%)"].rank(pct=True)
+        drawdown_risk = (
+            candidates.assign(_drawdown_risk=-candidates["Max drawdown (%)"])
+            .groupby("Sector")["_drawdown_risk"]
+            .rank(pct=True)
+        )
+        risk_exposure = pd.concat([volatility_risk, drawdown_risk], axis=1).mean(axis=1).fillna(0.5)
+        maximum_distance = max(target_risk, 1 - target_risk)
+        risk_fit = (1 - (risk_exposure - target_risk).abs() / maximum_distance).clip(0, 1)
+        quality_rank = candidates.groupby("Sector")["Score"].rank(pct=True)
+        candidates["Score"] = (
+            100 * (quality_rank * quality_weight + risk_fit * (1 - quality_weight))
+        ).round(1)
+        candidates["Score"] = (candidates["Score"] - macro_penalty).clip(0, 100)
+        candidates["View"] = candidates["Score"].map(
+            lambda score: "BUY" if score >= 68 else "HOLD" if score >= 48 else "SELL"
+        )
+        risk_preference = "balanced risk" if macro_risk == "Elevated" else "lower risk"
+        candidates["Drivers"] = candidates["Drivers"] + f", {macro_risk.lower()} event overlay favors {risk_preference}"
+
     sector_counts = candidates.groupby("Sector")["Symbol"].count()
     underfilled_sectors = [f"{sector} ({count}/3)" for sector, count in sector_counts.items() if count < 3]
     sector_summaries = candidates.groupby("Sector").agg(

@@ -182,15 +182,11 @@ def fetch_market_context() -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Market", "Latest", "One-year return (%)", "Trend vs 200-day average", "Ticker"])
 
 
-def fetch_market_news(limit: int = 5) -> pd.DataFrame:
-    """Fetch source-linked India policy and global market headlines for human review."""
+def fetch_market_news_queries(queries: dict[str, str], limit: int = 3) -> pd.DataFrame:
+    """Fetch source-linked, topic-specific news results for context and human review."""
     columns = ["Topic", "Headline", "Source", "Published", "URL"]
-    topics = {
-        "India policy and economy": "India government policy economy development markets",
-        "Global markets and geopolitics": "global markets geopolitics trade policy economy",
-    }
     rows = []
-    for topic, query in topics.items():
+    for topic, query in queries.items():
         try:
             response = requests.get(
                 "https://news.google.com/rss/search",
@@ -214,6 +210,15 @@ def fetch_market_news(limit: int = 5) -> pd.DataFrame:
         except Exception:
             continue
     return pd.DataFrame(rows, columns=columns)
+
+
+def fetch_market_news(limit: int = 5) -> pd.DataFrame:
+    """Fetch source-linked India policy and global market headlines for human review."""
+    topics = {
+        "India policy and economy": "India government policy economy development markets",
+        "Global markets and geopolitics": "global markets geopolitics trade policy economy",
+    }
+    return fetch_market_news_queries(topics, limit=limit)
 
 
 def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:

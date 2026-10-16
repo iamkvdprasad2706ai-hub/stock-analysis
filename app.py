@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
@@ -31,11 +32,20 @@ from stock_analysis.data import (  # noqa: E402
     fetch_fii_data,
     fetch_market_context,
     fetch_market_news,
+    fetch_market_news_queries,
     fetch_stock_profile,
     fetch_stock_sector,
     fetch_screener_fii_dii_top_stocks,
     load_stock_data,
     normalize_stock_symbol,
+)
+from stock_analysis.long_term import (  # noqa: E402
+    LONG_TERM_COLUMNS,
+    build_long_term_ideas,
+    select_long_term_candidates,
+)
+from stock_analysis.home_dashboard import (  # noqa: E402
+    build_market_overview,
 )
 
 st.set_page_config(page_title="Indian Stock Dashboard", layout="wide")
@@ -270,18 +280,316 @@ def cached_market_news() -> pd.DataFrame:
     return fetch_market_news()
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_long_term_ideas(market_cap_limit: float, exchange: str) -> pd.DataFrame:
+    pages = [cached_screener_page(limit=100, page=page) for page in range(1, 5)]
+    screen_data = pd.concat(pages, ignore_index=True).drop_duplicates("Symbol")
+    candidates = select_long_term_candidates(screen_data, market_cap_limit)
+    if candidates.empty:
+        return pd.DataFrame(columns=LONG_TERM_COLUMNS)
+
+    symbols = candidates["Symbol"].dropna().astype(str).str.upper().tolist()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        histories = dict(
+            zip(
+                symbols,
+                executor.map(
+                    lambda symbol: cached_stock_history(symbol, "3y", exchange),
+                    symbols,
+                ),
+            )
+        )
+    return build_long_term_ideas(candidates, histories, market_cap_limit)
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_home_market_data(
+    exchange: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    pages = [cached_screener_page(limit=100, page=page) for page in range(1, 5)]
+    screen_data = pd.concat(pages, ignore_index=True).drop_duplicates("Symbol")
+    symbols = screen_data["Symbol"].dropna().astype(str).str.upper().tolist()
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        histories = dict(
+            zip(
+                symbols,
+                executor.map(lambda symbol: cached_stock_history(symbol, "3y", exchange), symbols),
+            )
+        )
+        sector_values = dict(
+            zip(
+                symbols,
+                executor.map(lambda symbol: cached_stock_sector(symbol, exchange), symbols),
+            )
+        )
+    stocks, sectors = build_market_overview(screen_data, histories, sector_values)
+    market_context = cached_market_context()
+
+    sector_names = sectors["Sector"].astype(str).tolist()
+    sector_queries = {
+        f"Sector news · {sector}": (
+            f"India {sector} industry stocks earnings demand policy global market"
+        )
+        for sector in sector_names
+    }
+    recent_news_filter = (datetime.now() - pd.Timedelta(days=30)).strftime("%Y-%m-%d")
+    news_queries = {
+        "Global markets and geopolitics": (
+            f"global markets economy geopolitics trade policy oil after:{recent_news_filter}"
+        ),
+        "India markets and policy": (
+            f"India stock market economy government policy after:{recent_news_filter}"
+        ),
+        **{
+            topic: f"{query} after:{recent_news_filter}"
+            for topic, query in sector_queries.items()
+        },
+    }
+    news = fetch_market_news_queries(news_queries, limit=2)
+    return stocks, sectors, market_context, news
+
+
 st.title("Indian Stock Analysis Dashboard")
 st.caption("Analyze listed stocks on the National Stock Exchange or Bombay Stock Exchange.")
 
-workspace = st.sidebar.radio("Workspace", ["Stock workspace", "Market screener", "Market ideas"], index=0)
-st.sidebar.caption("Stock workspace: charts and trade ideas. Market screener: discovery. Market ideas: ranked setups.")
+workspace = st.sidebar.radio(
+    "Workspace",
+    ["Home / Market overview", "Stock workspace", "Market screener", "Market ideas", "Long-term ideas"],
+    index=0,
+)
+st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: independent small-cap screen.")
 
-exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
-symbol_input = st.text_input("Stock name or ticker", value="Reliance")
-period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
+if workspace == "Home / Market overview":
+    exchange = "NSE"
+    symbol_input = ""
+    period = "1y"
+else:
+    exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
+    symbol_input = st.text_input("Stock name or ticker", value="Reliance")
+    period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
+
+if workspace == "Home / Market overview":
+    st.subheader("Market pulse")
+    st.caption(
+        f"Live market snapshot · {datetime.now().strftime('%d %b %Y, %H:%M')} IST · "
+        "index levels and available India/global indicators are shown below."
+    )
+    with st.spinner("Loading index trends, screened-stock performance, sector data, and current headlines..."):
+        home_stocks, home_sectors, home_context, home_news = cached_home_market_data("NSE")
+
+    if home_context.empty:
+        st.warning("Market index data is currently unavailable. Check your connection and try again.")
+    else:
+        index_lookup = home_context.set_index("Market")
+        index_names = ["NIFTY 50", "S&P 500", "NASDAQ Composite", "CBOE VIX", "Crude oil", "Gold", "USD/INR"]
+        available_indices = [name for name in index_names if name in index_lookup.index]
+        index_cards = st.columns(min(4, len(available_indices)))
+        for position, name in enumerate(available_indices):
+            row = index_lookup.loc[name]
+            value = row.get("Latest")
+            change = row.get("One-year return (%)")
+            with index_cards[position % len(index_cards)]:
+                st.metric(
+                    name,
+                    f"{float(value):,.2f}" if pd.notna(value) else "—",
+                    f"{float(change):+.1f}% 1Y" if pd.notna(change) else None,
+                )
+
+        nifty = index_lookup.loc["NIFTY 50"] if "NIFTY 50" in index_lookup.index else None
+        if nifty is not None:
+            nifty_return = pd.to_numeric(nifty.get("One-year return (%)"), errors="coerce")
+            nifty_trend = nifty.get("Trend vs 200-day average", "unavailable")
+            if pd.notna(nifty_return):
+                if nifty_return >= 10 and nifty_trend == "Bullish":
+                    pulse = "Indian large-cap trend is positive"
+                    explanation = f"NIFTY 50 is {nifty_trend.lower()} versus its 200-day average and up {nifty_return:.1f}% over one year."
+                elif nifty_return <= -10 or nifty_trend == "Bearish":
+                    pulse = "Indian market trend is under pressure"
+                    explanation = f"NIFTY 50 is {nifty_trend.lower()} versus its 200-day average with a {nifty_return:+.1f}% one-year return."
+                else:
+                    pulse = "Indian market trend is mixed"
+                    explanation = f"NIFTY 50 has returned {nifty_return:+.1f}% over one year and is {nifty_trend.lower()} versus its 200-day average."
+                st.info(f"**{pulse}.** {explanation} Index direction is a snapshot, not a forecast.")
+
+    st.subheader("Best and weakest performers")
+    st.caption(
+        "Ranked by one-year price return from the available four-page Screener.in FII/DII screen universe "
+        "(not the full NSE/BSE listed universe). Synthetic/fallback prices are excluded."
+    )
+    if home_stocks.empty:
+        st.warning("Insufficient real price-history data to rank stocks right now.")
+    else:
+        ranked_stocks = home_stocks.dropna(subset=["1-year return (%)"])
+        st.markdown("#### Top five · strongest 1Y return")
+        st.dataframe(
+            ranked_stocks.sort_values("1-year return (%)", ascending=False).head(5),
+            width="stretch",
+            hide_index=True,
+        )
+        st.markdown("#### Bottom five · weakest 1Y return")
+        st.dataframe(
+            ranked_stocks.sort_values("1-year return (%)", ascending=True).head(5),
+            width="stretch",
+            hide_index=True,
+        )
+
+    st.subheader("Sector heat check")
+    st.caption(
+        "One-year average return by sector in the screened-stock sample. "
+        "Green is positive, amber is near flat, and red is negative."
+    )
+    if home_sectors.empty:
+        st.info("Sector classifications or return history are unavailable.")
+    else:
+        heatmap_data = home_sectors.sort_values(
+            "Average 1-year return (%)", ascending=True
+        ).copy()
+        heatmap_colors = heatmap_data["Market read"].map(
+            {
+                "Doing well": "#16835d",
+                "Stagnating": "#d79a16",
+                "Down": "#c94c4c",
+            }
+        )
+        sector_chart = go.Figure(
+            go.Bar(
+                x=heatmap_data["Average 1-year return (%)"],
+                y=heatmap_data["Sector"],
+                orientation="h",
+                marker_color=heatmap_colors,
+                text=heatmap_data["Average 1-year return (%)"].map(lambda value: f"{value:+.1f}%"),
+                textposition="outside",
+                cliponaxis=False,
+                customdata=heatmap_data[["Market read", "Stocks tracked"]].to_numpy(),
+                hovertemplate=(
+                    "<b>%{y}</b><br>Average 1Y return: %{x:+.1f}%"
+                    "<br>Market read: %{customdata[0]}"
+                    "<br>Stocks tracked: %{customdata[1]}<extra></extra>"
+                ),
+            )
+        )
+        sector_chart.add_vline(x=0, line_color="#64748b", line_width=1)
+        sector_chart.update_layout(
+            height=max(300, 48 * len(heatmap_data) + 90),
+            margin={"l": 12, "r": 55, "t": 12, "b": 45},
+            xaxis_title="Average one-year return (%)",
+            yaxis_title=None,
+            template="plotly_white",
+            showlegend=False,
+            bargap=0.32,
+            hoverlabel={"bgcolor": "white", "font_size": 13},
+        )
+        sector_chart.update_xaxes(
+            zeroline=False,
+            ticksuffix="%",
+            gridcolor="#e9eef3",
+        )
+        sector_chart.update_yaxes(
+            automargin=True,
+            tickfont={"size": 13},
+        )
+        st.plotly_chart(sector_chart, width="stretch", config={"displayModeBar": False})
+
+        doing_well, stagnating, down = st.columns(3)
+        for column, (market_read, label) in zip(
+            (doing_well, stagnating, down),
+            (
+                ("Doing well", "Positive"),
+                ("Stagnating", "Near flat"),
+                ("Down", "Negative"),
+            ),
+        ):
+            group = home_sectors[home_sectors["Market read"] == market_read]
+            names = ", ".join(group["Sector"].astype(str)) if not group.empty else "None in this sample"
+            column.markdown(f"**{label}**")
+            column.write(names)
+
+        st.markdown("#### Sector context")
+        for _, sector_row in home_sectors.iterrows():
+            sector = str(sector_row["Sector"])
+            market_read = str(sector_row["Market read"])
+            return_value = float(sector_row["Average 1-year return (%)"])
+            matches = home_news[home_news["Topic"] == f"Sector news · {sector}"]
+            with st.expander(
+                f"{sector} · {market_read} · {return_value:+.1f}% 1Y",
+                expanded=False,
+            ):
+                st.write(
+                    f"Average return across {int(sector_row['Stocks tracked'])} tracked stocks: "
+                    f"{return_value:+.1f}% over one year. This measures price performance, not its cause. "
+                    "Earnings, industry demand, commodity or climate exposure, regulation, and geopolitical events "
+                    "are possible factors to investigate."
+                )
+                if matches.empty:
+                    st.caption("No recent sector-specific headline was retrieved; no causal explanation is inferred.")
+                else:
+                    for _, story in matches.head(2).iterrows():
+                        st.markdown(
+                            f"- [{story['Headline']}]({story['URL']}) · {story['Source']} · {story['Published']}"
+                        )
+
+    st.subheader("Global context and latest headlines")
+    st.caption("Headlines are links for context, not proof that an event caused a price move.")
+    global_news = home_news[home_news["Topic"].isin(["Global markets and geopolitics", "India markets and policy"])]
+    if global_news.empty:
+        st.info("Current global and India market headlines are temporarily unavailable.")
+    else:
+        for topic, stories in global_news.groupby("Topic", sort=False):
+            st.markdown(f"**{topic}**")
+            for _, story in stories.iterrows():
+                st.markdown(
+                    f"- [{story['Headline']}]({story['URL']}) · {story['Source']} · {story['Published']}"
+                )
+    st.caption(
+        "Coverage note: market breadth here is based on an FII/DII-focused stock screen, not every listed company. "
+        "Sector stories and macro headlines are recent search results and do not establish causation; verify company filings "
+        "and official sources before making investment decisions."
+    )
+    st.stop()
 
 if symbol_input:
     try:
+        if workspace == "Long-term ideas":
+            st.subheader("Long-term small-cap ideas")
+            st.caption(
+                "Independent long-term screening engine. It uses available Screener.in fundamentals and Yahoo Finance price history; "
+                "it does not reuse the market-ideas event-risk recommendations."
+            )
+            market_cap_preset = st.radio(
+                "Choose maximum market cap",
+                ["₹5,000 Cr", "₹10,000 Cr", "₹15,000 Cr", "₹25,000 Cr"],
+                index=3,
+                horizontal=True,
+                help="Choose a larger cap to include more companies in the candidate screen.",
+            )
+            market_cap_limit = int(market_cap_preset.replace("₹", "").replace(",", "").replace(" Cr", ""))
+            st.caption(f"Showing eligible companies with market cap up to ₹{market_cap_limit:,} Cr.")
+            st.info(
+                "Order-book strength and legal implications are not verified by the available data feeds. "
+                "The confidence score measures screening evidence, not the probability of returns. "
+                "Targets and timelines are illustrative scenarios, not a multibagger promise or personalized financial advice."
+            )
+            with st.spinner("Screening fundamentals and loading eligible price histories in parallel..."):
+                long_term_ideas = cached_long_term_ideas(market_cap_limit, exchange)
+            if long_term_ideas.empty:
+                st.warning(
+                    "No stocks currently met the available fundamental, price-history, moving-average, and 52-week-range filters. "
+                    "This screen does not relax its criteria or substitute synthetic prices."
+                )
+            else:
+                st.dataframe(long_term_ideas, width="stretch", hide_index=True)
+                st.caption(
+                    "Screen criteria: market cap within selected limit, ROCE ≥ 15%, positive FII and DII holding changes, "
+                    "P/E between 0 and 60, at least 200 real daily closes, CMP within 15% of its 50-day average and 35% "
+                    "of its 200-day average, and within the lower 85% of its 52-week range. “Entry candidate” is reserved "
+                    "for stocks within 15% of both averages and the lower 40% of their 52-week range; all other rows are "
+                    "watchlist-only pending a pullback. T1/T2/T3 are scenario levels of +15%/+30%/+50% from the "
+                    "50/200-day average entry zone; timelines are tentative. The feed may provide fewer than 5 qualifying "
+                    "stocks, so results are not padded with weak or synthetic candidates. Independently check balance-sheet "
+                    "quality, order book, litigation, liquidity, and company filings before acting."
+                )
+            st.stop()
+
         ticker = normalize_stock_symbol(symbol_input, exchange=exchange)
         profile = fetch_stock_profile(symbol_input, exchange=exchange)
         data = cached_stock_history(ticker, period, exchange)
@@ -297,7 +605,7 @@ if symbol_input:
         if workspace == "Market ideas":
             st.subheader("Sector-ranked market ideas")
             st.caption("Top three eligible stocks per sector from the Screener.in FII/DII universe, ranked using current market conditions and up to 15 years of price history.")
-            macro_risk = st.selectbox("Manual event-risk overlay", ["Neutral", "Elevated", "High"], help="Applies a manual penalty for political, geopolitical, trade-policy, or other event risk. Headlines below are context, not automatically scored.")
+            macro_risk = st.selectbox("Manual event-risk overlay", ["Neutral", "Elevated", "High"], help="Neutral ranks by trend and momentum, Elevated favors a more balanced risk profile, and High favors lower relative volatility and historical drawdown. This changes candidate rankings; headlines are not automatically scored.")
             if top_stocks.empty or "Symbol" not in top_stocks.columns:
                 st.info("The market-ideas universe is temporarily unavailable.")
             else:
@@ -337,7 +645,12 @@ if symbol_input:
                     excluded = market_ideas.attrs.get("unclassified_count", 0) + market_ideas.attrs.get("rejected_history_count", 0)
                     if excluded:
                         st.caption(f"Excluded {excluded} candidates with missing sector classification or genuine price history.")
-                    st.caption("History coverage varies by listing date and data availability. Entry, targets, and stop loss are model levels, not personalized financial advice.")
+                    risk_guidance = {
+                        "Neutral": "uses the standard trend-and-momentum ranking.",
+                        "Elevated": "favors a balanced volatility and drawdown profile.",
+                        "High": "favors lower-volatility, lower-drawdown stocks.",
+                    }[macro_risk]
+                    st.caption(f"{macro_risk} event-risk setting {risk_guidance} History coverage varies by listing date and data availability. Entry, targets, and stop loss are model levels, not personalized financial advice.")
 
                 st.subheader("Indian and global market context")
                 if market_context.empty:

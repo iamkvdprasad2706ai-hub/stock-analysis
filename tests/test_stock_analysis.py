@@ -5,6 +5,8 @@ import pytest
 import stock_analysis.data as stock_data
 from stock_analysis.analysis import _historical_metrics, analyze_institutional_trend, build_market_ideas, generate_recommendations, summarize_stock
 from stock_analysis.data import fetch_bulk_deals, fetch_fii_data, fetch_market_context, fetch_market_news, load_stock_data, normalize_stock_symbol
+from stock_analysis.long_term import build_long_term_ideas, select_long_term_candidates
+from stock_analysis.home_dashboard import build_market_overview
 
 
 def test_normalize_stock_symbol_converts_to_nse_format():
@@ -80,6 +82,39 @@ def test_fetch_market_news_keeps_headline_sources_and_links(monkeypatch):
     assert len(news) == 2
     assert news.iloc[0]["Source"] == "Example News"
     assert news.iloc[0]["URL"] == "https://example.com/story"
+
+
+def test_market_overview_ranks_stocks_and_classifies_sectors():
+    screen = pd.DataFrame(
+        [
+            {"Symbol": "WINNER", "Company": "Winner Co"},
+            {"Symbol": "LOSER", "Company": "Loser Co"},
+            {"Symbol": "FLAT", "Company": "Flat Co"},
+        ]
+    )
+    dates = pd.date_range("2024-01-01", periods=300, freq="B")
+    histories = {
+        "WINNER": pd.DataFrame({"date": dates, "close": np.linspace(100, 130, 300)}),
+        "LOSER": pd.DataFrame({"date": dates, "close": np.linspace(130, 100, 300)}),
+        "FLAT": pd.DataFrame({"date": dates, "close": np.full(300, 100.0)}),
+    }
+
+    stocks, sectors = build_market_overview(
+        screen,
+        histories,
+        {"WINNER": "Technology", "LOSER": "Energy", "FLAT": "Utilities"},
+    )
+
+    assert stocks.sort_values("1-year return (%)", ascending=False)["Symbol"].tolist() == [
+        "WINNER",
+        "FLAT",
+        "LOSER",
+    ]
+    assert sectors.set_index("Sector")["Market read"].to_dict() == {
+        "Technology": "Doing well",
+        "Utilities": "Stagnating",
+        "Energy": "Down",
+    }
 
 
 def test_summarize_stock_handles_basic_dataframe():
@@ -177,6 +212,157 @@ def test_build_market_ideas_returns_trade_levels():
     strong_stock_score = ideas.loc[ideas["Symbol"] == "TECH0", "Score"].iloc[0]
     adjusted_score = adjusted.loc[adjusted["Symbol"] == "TECH0", "Score"].iloc[0]
     assert adjusted_score < strong_stock_score
+
+
+def test_market_ideas_event_risk_overlay_changes_stock_selection():
+    dates = pd.date_range("2023-01-01", periods=3 * 252, freq="B")
+    profiles = [
+        ("TECH0", 0.28, 0.55),
+        ("TECH1", 0.25, 0.48),
+        ("TECH2", 0.22, 0.40),
+        ("TECH3", 0.16, 0.16),
+        ("TECH4", 0.14, 0.13),
+        ("TECH5", 0.12, 0.10),
+    ]
+    screen_rows = []
+    histories = {}
+    for index, (symbol, annual_return, annual_volatility) in enumerate(profiles):
+        rng = np.random.default_rng(index)
+        daily_returns = rng.normal(annual_return / 252, annual_volatility / np.sqrt(252), len(dates))
+        close = 100 * np.cumprod(1 + daily_returns)
+        screen_rows.append(
+            {"Symbol": symbol, "Company": symbol, "Sector": "Technology", "FII change (%)": 1.0, "DII change (%)": 1.0}
+        )
+        histories[symbol] = pd.DataFrame({"date": dates, "close": close, "volume": [1000] * len(dates)})
+
+    screen_data = pd.DataFrame(screen_rows)
+    neutral = build_market_ideas(screen_data, histories, macro_risk="Neutral")
+    elevated = build_market_ideas(screen_data, histories, macro_risk="Elevated")
+    high = build_market_ideas(screen_data, histories, macro_risk="High")
+
+    assert set(neutral["Symbol"]) != set(elevated["Symbol"])
+    assert set(elevated["Symbol"]) != set(high["Symbol"])
+    assert high["Annualized volatility (%)"].mean() < neutral["Annualized volatility (%)"].mean()
+    assert high["Drivers"].str.contains("high event overlay favors lower risk").all()
+
+
+def test_long_term_ideas_rank_eligible_small_caps_and_disclose_unverified_checks():
+    screen = pd.DataFrame(
+        [
+            {
+                "Symbol": "SMALL",
+                "Company": "Small Company",
+                "Market Cap (Rs. Cr)": 3000,
+                "ROCE (%)": 24,
+                "P/E": 28,
+                "FII change (%)": 0.8,
+                "DII change (%)": 0.6,
+            },
+            {
+                "Symbol": "LARGE",
+                "Company": "Large Company",
+                "Market Cap (Rs. Cr)": 30000,
+                "ROCE (%)": 30,
+                "P/E": 20,
+                "FII change (%)": 2,
+                "DII change (%)": 2,
+            },
+            {
+                "Symbol": "WEAK",
+                "Company": "Weak Company",
+                "Market Cap (Rs. Cr)": 3000,
+                "ROCE (%)": 10,
+                "P/E": 20,
+                "FII change (%)": 1,
+                "DII change (%)": 1,
+            },
+        ]
+    )
+    close = np.concatenate([np.linspace(100, 90, 50), np.linspace(90, 98, 100), np.linspace(98, 90, 150)])
+    history = pd.DataFrame({"date": pd.date_range("2024-01-01", periods=len(close), freq="B"), "close": close})
+
+    candidates = select_long_term_candidates(screen, market_cap_limit=10_000)
+    ideas = build_long_term_ideas(screen, {"SMALL": history}, market_cap_limit=10_000)
+
+    assert candidates["Symbol"].tolist() == ["SMALL"]
+    assert ideas["Symbol"].tolist() == ["SMALL"]
+    assert ideas.loc[0, "Setup status"] == "Entry candidate"
+    assert ideas.loc[0, "CMP (₹)"] == pytest.approx(close[-1])
+    assert ideas.loc[0, "Target 1 (₹)"] < ideas.loc[0, "Target 2 (₹)"] < ideas.loc[0, "Target 3 (₹)"]
+    assert ideas.loc[0, "Legal screening"] == "Not verified"
+    assert ideas.loc[0, "Order book"] == "Not verified"
+    assert ideas.loc[0, "Confidence score (%)"] <= 100
+
+
+def test_long_term_ideas_reject_synthetic_and_far_from_moving_average_prices():
+    screen = pd.DataFrame(
+        [
+            {
+                "Symbol": "SMALL",
+                "Company": "Small Company",
+                "Market Cap (Rs. Cr)": 3000,
+                "ROCE (%)": 24,
+                "P/E": 28,
+                "FII change (%)": 0.8,
+                "DII change (%)": 0.6,
+            }
+        ]
+    )
+    synthetic = pd.DataFrame({"close": [100.0] * 250})
+    synthetic.attrs["synthetic"] = True
+    assert build_long_term_ideas(screen, {"SMALL": synthetic}).empty
+
+
+def test_long_term_ideas_include_pullback_watchlist_candidates():
+    screen = pd.DataFrame(
+        [
+            {
+                "Symbol": "WATCH",
+                "Company": "Watchlist Company",
+                "Market Cap (Rs. Cr)": 3000,
+                "ROCE (%)": 24,
+                "P/E": 28,
+                "FII change (%)": 0.8,
+                "DII change (%)": 0.6,
+            }
+        ]
+    )
+    close = np.concatenate([np.linspace(80, 110, 252), np.full(48, 100.0)])
+    history = pd.DataFrame(
+        {"date": pd.date_range("2024-01-01", periods=len(close), freq="B"), "close": close}
+    )
+
+    ideas = build_long_term_ideas(screen, {"WATCH": history})
+
+    assert ideas["Symbol"].tolist() == ["WATCH"]
+    assert ideas.loc[0, "Setup status"] == "Watchlist — wait for pullback"
+
+
+def test_long_term_ideas_return_multiple_qualified_recommendations():
+    screen = pd.DataFrame(
+        [
+            {
+                "Symbol": f"SMALL{index}",
+                "Company": f"Small Company {index}",
+                "Market Cap (Rs. Cr)": 3000 + index * 100,
+                "ROCE (%)": 24 + index,
+                "P/E": 28,
+                "FII change (%)": 0.8,
+                "DII change (%)": 0.6,
+            }
+            for index in range(8)
+        ]
+    )
+    close = np.concatenate([np.linspace(100, 90, 50), np.linspace(90, 98, 100), np.linspace(98, 90, 150)])
+    history = pd.DataFrame(
+        {"date": pd.date_range("2024-01-01", periods=len(close), freq="B"), "close": close}
+    )
+    histories = {symbol: history.copy() for symbol in screen["Symbol"]}
+
+    ideas = build_long_term_ideas(screen, histories, market_cap_limit=10_000)
+
+    assert len(ideas) == 8
+    assert ideas["Rank"].tolist() == list(range(1, 9))
 
 
 def test_generate_recommendations_refuses_synthetic_fallback_prices():

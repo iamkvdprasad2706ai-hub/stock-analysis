@@ -8,13 +8,13 @@ version = "0.1.0"
 description = "NSE and BSE stock analysis workspace"
 requires-python = ">=3.11"
 dependencies = [
-  "streamlit>=1.39.0",
+  "streamlit>=1.66.0",
   "pandas>=2.2.0",
-  "numpy>=1.26.0",
+  "numpy>=2.5.4",
   "matplotlib>=3.8.0",
   "plotly>=5.24.0",
   "yfinance>=0.2.54",
-  "nsepython>=2.97",
+  "nsepython>=2.101",
 ]
 
 [project.optional-dependencies]

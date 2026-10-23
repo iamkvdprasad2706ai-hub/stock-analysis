@@ -114,26 +114,37 @@ def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d", excha
             "start": datetime.today() - pd.DateOffset(years=int(years_match.group(1)))
         }
         history = yf.Ticker(ticker).history(interval=interval, auto_adjust=True, **history_options)
-        if history.empty:
-            raise ValueError(f"No data found for symbol {ticker}.")
-
-        data = history.reset_index()
-        if "Date" in data.columns:
-            data = data.rename(columns={"Date": "date"})
-        data["symbol"] = ticker
-        return data[["symbol", "date", "Open", "High", "Low", "Close", "Volume"]].rename(
-            columns={
-                "Open": "open",
-                "High": "high",
-                "Low": "low",
-                "Close": "close",
-                "Volume": "volume",
-            }
-        )
     except Exception:
         sample = _build_sample_data(ticker)
         sample.attrs["synthetic"] = True
+        sample.attrs["source"] = "synthetic_fallback"
+        sample.attrs["data_source"] = "synthetic_fallback"
         return sample
+
+    if history.empty:
+        sample = _build_sample_data(ticker)
+        sample.attrs["synthetic"] = True
+        sample.attrs["source"] = "synthetic_fallback"
+        sample.attrs["data_source"] = "synthetic_fallback"
+        return sample
+
+    data = history.reset_index()
+    if "Date" in data.columns:
+        data = data.rename(columns={"Date": "date"})
+    data["symbol"] = ticker
+    result = data[["symbol", "date", "Open", "High", "Low", "Close", "Volume"]].rename(
+        columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }
+    )
+    result.attrs["synthetic"] = False
+    result.attrs["source"] = "yahoo_finance"
+    result.attrs["data_source"] = "yahoo_finance"
+    return result
 
 
 def fetch_stock_sector(symbol: str, exchange: str = "NSE") -> str:

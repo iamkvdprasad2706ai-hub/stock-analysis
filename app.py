@@ -44,6 +44,15 @@ from stock_analysis.long_term import (  # noqa: E402
     build_long_term_ideas,
     select_long_term_candidates,
 )
+from stock_analysis.ipo_analysis import (  # noqa: E402
+    IPOFeed,
+    IPOFeedError,
+    NSE_IPO_URL,
+    fetch_ipo_issues,
+    listing_price_scenarios,
+    retail_allotment_proxy,
+)
+from stock_analysis.ipo_research import get_issuer_research  # noqa: E402
 from stock_analysis.home_dashboard import (  # noqa: E402
     build_market_overview,
 )
@@ -349,26 +358,324 @@ def cached_home_market_data(
     return stocks, sectors, market_context, news
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def cached_ipo_issues() -> IPOFeed:
+    return fetch_ipo_issues()
+
+
 st.title("Indian Stock Analysis Dashboard")
 st.caption("Analyze listed stocks on the National Stock Exchange or Bombay Stock Exchange.")
 
 workspace = st.sidebar.radio(
     "Workspace",
-    ["Home / Market overview", "Stock workspace", "Market screener", "Market ideas", "Long-term ideas"],
+    [
+        "Home / Market overview",
+        "Stock workspace",
+        "Market screener",
+        "Market ideas",
+        "Long-term ideas",
+        "IPO analysis",
+    ],
     index=0,
 )
-st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: independent small-cap screen.")
+st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: independent small-cap screen. IPO analysis: current and forthcoming NSE issues.")
 
 if workspace == "Home / Market overview":
     exchange = "NSE"
     symbol_input = ""
     period = "1y"
+elif workspace == "IPO analysis":
+    exchange = ""
+    symbol_input = ""
+    period = ""
 else:
     exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
     symbol_input = st.text_input("Stock name or ticker", value="Reliance")
     period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
 
-if workspace == "Home / Market overview":
+if workspace == "IPO analysis":
+    st.subheader("Current and forthcoming IPOs")
+    st.caption(
+        "Issue terms and live subscription are from NSE. Fundamentals and "
+        "listing-price scenarios are evidence-limited; read the linked offer "
+        "documents before making an investment decision."
+    )
+    st.link_button("Open official NSE IPO page", NSE_IPO_URL)
+    try:
+        with st.spinner("Loading current and forthcoming public issues from NSE..."):
+            ipo_feed = cached_ipo_issues()
+    except IPOFeedError as exc:
+        st.error(f"Unable to load NSE IPO data: {exc}")
+        st.stop()
+
+    if ipo_feed.issues.empty:
+        st.info("NSE currently reports no current or forthcoming IPO issues.")
+    else:
+        issues = ipo_feed.issues
+        st.caption(
+            f"NSE feed refreshed {ipo_feed.fetched_at.strftime('%d %b %Y, %H:%M %Z')}. "
+            f"{len(issues)} issue(s) found."
+        )
+        for issue_index, issue in enumerate(issues.to_dict("records")):
+            name = str(issue.get("company") or issue.get("symbol") or "IPO")
+            status = str(issue.get("status") or "Status unavailable")
+            with st.expander(f"{name} · {status}", expanded=issue_index == 0):
+                price_low = issue.get("price_low")
+                price_high = issue.get("price_high")
+                price_band_text = (
+                    f"₹{price_low:,.2f}–₹{price_high:,.2f}"
+                    if pd.notna(price_low) and pd.notna(price_high)
+                    else str(issue.get("price_band") or "Not published")
+                )
+                start_date = issue.get("issue_start_date")
+                end_date = issue.get("issue_end_date")
+                date_text = (
+                    f"{start_date:%d %b %Y} – {end_date:%d %b %Y}"
+                    if pd.notna(start_date) and pd.notna(end_date)
+                    else "Dates not published"
+                )
+                summary_cols = st.columns(5)
+                summary_cols[0].metric("Issue status", status)
+                summary_cols[1].metric("Offer price band", price_band_text)
+                summary_cols[2].metric("Bidding period", date_text)
+                total_subscription = issue.get("total_subscription")
+                summary_cols[3].metric(
+                    "Total subscription",
+                    f"{total_subscription:.2f}×"
+                    if pd.notna(total_subscription)
+                    else "Not available yet",
+                )
+                retail_subscription = issue.get("retail_subscription")
+                summary_cols[4].metric(
+                    "Retail subscription",
+                    f"{retail_subscription:.2f}×"
+                    if pd.notna(retail_subscription)
+                    else "Not available yet",
+                )
+
+                st.markdown("#### Issuer fundamentals and offer terms")
+                issue_size = issue.get("issue_size_description")
+                if issue_size:
+                    st.markdown(f"- **Issue structure:** {issue_size}")
+                else:
+                    st.markdown("- **Issue structure:** Not provided in the NSE summary feed.")
+                sector = issue.get("sector")
+                if sector:
+                    st.markdown(f"- **Sector / industry:** {sector}")
+                lot_size = issue.get("lot_size")
+                if lot_size:
+                    st.markdown(f"- **Minimum bid lot:** {lot_size}")
+                face_value = issue.get("face_value")
+                if face_value:
+                    st.markdown(f"- **Face value:** {face_value}")
+                business_description = issue.get("business_description")
+                if business_description:
+                    st.markdown(f"- **Business description:** {business_description}")
+                recent_expansion = issue.get("recent_expansion")
+                if recent_expansion:
+                    st.markdown(f"- **Expansion / capex disclosed:** {recent_expansion}")
+                order_book = issue.get("order_book")
+                if order_book:
+                    st.markdown(f"- **Order book disclosed:** {order_book}")
+
+                research = get_issuer_research(str(issue.get("symbol") or ""))
+                if research:
+                    st.markdown("#### Issuer research")
+                    st.caption(
+                        f"Prospectus-based snapshot · {research.researched_on}. "
+                        "Reported amounts retain the source units and periods."
+                    )
+                    st.markdown(f"- **Sector:** {research.sector}")
+                    st.markdown(f"- **Business:** {research.business}")
+                    if research.financials:
+                        st.dataframe(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        key: (
+                                                "—"
+                                                if pd.isna(value)
+                                                else (
+                                                    f"{value:,.2f}"
+                                                    if isinstance(value, (int, float))
+                                                    and not isinstance(value, bool)
+                                                    else str(value)
+                                                )
+                                            )
+                                            for key, value in row.items()
+                                        }
+                                    for row in research.financials
+                                ]
+                            ),
+                            hide_index=True,
+                            width="stretch",
+                        )
+                    else:
+                        st.info(
+                            "Financial figures are not shown because they have "
+                            "not yet been verified against the issuer's RHP."
+                        )
+                    st.markdown(f"- **Peer context:** {research.peer_context}")
+                    st.markdown(
+                        f"- **Expansion / investment:** "
+                        f"{research.expansion_and_investment}"
+                    )
+                    st.markdown(f"- **Order book / backlog:** {research.order_book}")
+                    st.markdown("**Key disclosed risks**")
+                    for risk in research.risks:
+                        st.markdown(f"- {risk}")
+                    st.info(f"**Preliminary view:** {research.view}")
+                    st.caption(research.coverage_note)
+
+                if status.lower() == "active" and pd.notna(total_subscription):
+                    if total_subscription >= 1:
+                        demand_read = (
+                            f"Current aggregate demand is {total_subscription:.2f}× "
+                            "at the NSE observation time; demand is not evidence "
+                            "that the offer is fairly valued."
+                        )
+                    else:
+                        demand_read = (
+                            f"Current aggregate bids cover {total_subscription:.2f}× "
+                            "the issue; demand may change before closing."
+                        )
+                else:
+                    demand_read = (
+                        "NSE has not published live bid data for this forthcoming issue."
+                    )
+                st.caption(
+                    f"Live demand context: {demand_read} Subscription reflects "
+                    "bids at the NSE observation time and is not a valuation "
+                    "signal or personal allotment probability."
+                )
+
+                ratios_url = issue.get("ratios_url")
+                rhp_url = issue.get("rhp_url")
+                company_website = (
+                    research.issuer_url if research else issue.get("company_website")
+                )
+                investor_relations_url = (
+                    research.investor_relations_url
+                    if research
+                    else issue.get("investor_relations_url")
+                )
+                annual_report_url = issue.get("annual_report_url")
+                document_cols = st.columns(5)
+                if (
+                    isinstance(company_website, str)
+                    and company_website.startswith("https://")
+                ):
+                    document_cols[0].link_button(
+                        "Issuer website",
+                        company_website,
+                        width="stretch",
+                    )
+                if (
+                    isinstance(investor_relations_url, str)
+                    and investor_relations_url.startswith("https://")
+                ):
+                    document_cols[1].link_button(
+                        "Issuer investor relations",
+                        investor_relations_url,
+                        width="stretch",
+                    )
+                if (
+                    isinstance(annual_report_url, str)
+                    and annual_report_url.startswith("https://")
+                ):
+                    document_cols[2].link_button(
+                        "Issuer annual report / results",
+                        annual_report_url,
+                        width="stretch",
+                    )
+                if isinstance(ratios_url, str) and ratios_url.startswith("https://"):
+                    document_cols[3].link_button(
+                        "NSE price / valuation basis",
+                        ratios_url,
+                        width="stretch",
+                    )
+                else:
+                    document_cols[3].caption("NSE valuation document unavailable")
+                rhp_url = research.rhp_url if research else rhp_url
+                if isinstance(rhp_url, str) and rhp_url.startswith("https://"):
+                    document_cols[4].link_button(
+                        "NSE Red Herring Prospectus",
+                        rhp_url,
+                        width="stretch",
+                    )
+
+                st.markdown("#### Listing-price sensitivity (not a prediction)")
+                scenarios = listing_price_scenarios(price_low, price_high)
+                if scenarios:
+                    scenario_cols = st.columns(3)
+                    for column, (label, value) in zip(
+                        scenario_cols, scenarios.items(), strict=False
+                    ):
+                        column.metric(label, f"₹{value:,.2f}")
+                    st.caption(
+                        "Sensitivity uses a 10% downside/upside around the published "
+                        "price band; the midpoint is only a neutral reference. "
+                        "These are not probability-weighted forecasts, and NSE does "
+                        "not publish a reliable listing-price prediction."
+                    )
+                else:
+                    st.caption("Price scenarios are unavailable until NSE publishes a price band.")
+
+                st.markdown("#### Retail allotment context")
+                allotment_proxy = retail_allotment_proxy(
+                    float(retail_subscription)
+                    if pd.notna(retail_subscription)
+                    else None
+                )
+                if allotment_proxy is None:
+                    if pd.notna(retail_subscription):
+                        st.caption(
+                            f"Retail category is at {retail_subscription:.2f}× "
+                            "subscription and is not oversubscribed at this NSE "
+                            "update. This does not guarantee allotment; demand "
+                            "may change before the issue closes."
+                        )
+                    else:
+                        st.caption(
+                            "Retail category subscription is not available yet; "
+                            "allotment context will appear when NSE publishes bids."
+                        )
+                else:
+                    st.metric(
+                        "Inverse retail-subscription proxy",
+                        f"≈{allotment_proxy:.1f}%",
+                    )
+                    st.caption(
+                        "This is 1 ÷ retail oversubscription, not a personal "
+                        "allotment probability. Actual allotment depends on valid "
+                        "applications, lot rules, category allocation, and the "
+                        "registrar’s lottery where applicable."
+                    )
+                category_rows = issue.get("categories")
+                if isinstance(category_rows, list) and category_rows:
+                    st.markdown("##### NSE category-wise bid data")
+                    st.dataframe(
+                        pd.DataFrame(category_rows).rename(
+                            columns={
+                                "category": "Category",
+                                "shares_offered": "Shares offered",
+                                "shares_bid": "Shares bid",
+                                "subscription": "Subscription (×)",
+                            }
+                        ),
+                        width="stretch",
+                        hide_index=True,
+                    )
+                if issue.get("details_error"):
+                    st.warning(str(issue["details_error"]))
+                st.caption(f"Sources: [NSE issue details]({issue['issue_info_url']}) · [NSE IPO feed]({NSE_IPO_URL})")
+
+    st.warning(
+        "For information only, not investment advice. IPO demand can change until "
+        "the issue closes; listing gains and allotment are never guaranteed."
+    )
+    st.stop()
+elif workspace == "Home / Market overview":
     st.subheader("Market pulse")
     st.caption(
         f"Live market snapshot · {datetime.now().strftime('%d %b %Y, %H:%M')} IST · "

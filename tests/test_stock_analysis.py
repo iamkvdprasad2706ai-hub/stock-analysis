@@ -5,7 +5,11 @@ import pytest
 import stock_analysis.data as stock_data
 from stock_analysis.analysis import _historical_metrics, analyze_institutional_trend, build_market_ideas, generate_recommendations, summarize_stock
 from stock_analysis.data import fetch_bulk_deals, fetch_fii_data, fetch_market_context, fetch_market_news, load_stock_data, normalize_stock_symbol
-from stock_analysis.long_term import build_long_term_ideas, select_long_term_candidates
+from stock_analysis.long_term import (
+    LONG_TERM_RESEARCH_WATCHLIST,
+    build_long_term_ideas,
+    select_long_term_candidates,
+)
 from stock_analysis.home_dashboard import build_market_overview
 
 
@@ -363,6 +367,24 @@ def test_long_term_ideas_return_multiple_qualified_recommendations():
 
     assert len(ideas) == 8
     assert ideas["Rank"].tolist() == list(range(1, 9))
+
+
+def test_long_term_research_watchlist_contains_ten_candidates_and_flags_exploratory_ones():
+    assert len(LONG_TERM_RESEARCH_WATCHLIST) == 10
+    assert {item["Symbol"] for item in LONG_TERM_RESEARCH_WATCHLIST} == {
+        "MANORAMA",
+        "CORONA",
+        "SHAILY",
+        "BLUEJET",
+        "OBSCP",
+        "FILATEX",
+        "GUJTHEM",
+        "BELRISE",
+        "RACLGEAR",
+        "AMIORG",
+    }
+    assert all(item["Research focus"] and item["Basis"] for item in LONG_TERM_RESEARCH_WATCHLIST)
+    assert sum("Exploratory" in item["Basis"] for item in LONG_TERM_RESEARCH_WATCHLIST) == 2
 
 
 def test_generate_recommendations_refuses_synthetic_fallback_prices():

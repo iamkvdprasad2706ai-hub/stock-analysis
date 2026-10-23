@@ -8,7 +8,7 @@ A Python-based stock analysis project for exploring Indian stock price history, 
 - Select NSE or BSE when looking up a stock; explicit Yahoo Finance suffixes (`.NS` and `.BO`) are also supported
 - Analyze recommendations with up to 15 years of available price history, including CAGR and drawdown context
 - Rank market ideas by sector trend and show three eligible stocks per sector, with India/global market indicators and source-linked headlines
-- Screen independent long-term small-cap ideas using available ROCE, valuation, institutional-holding changes, moving-average proximity, and 52-week range data
+- Screen independent long-term small-cap ideas using available ROCE, valuation, institutional-holding changes, moving-average proximity, and 52-week range data; show a separate 10-name research watchlist with explicit live-screen and due-diligence limitations
 - Review current and forthcoming NSE IPOs, official issue terms, live category demand, offer documents, and clearly labeled listing-price sensitivities
 - View stock price and moving average trend lines
 - Inspect daily return distribution and summary metrics

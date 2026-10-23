@@ -41,6 +41,7 @@ from stock_analysis.data import (  # noqa: E402
 )
 from stock_analysis.long_term import (  # noqa: E402
     LONG_TERM_COLUMNS,
+    LONG_TERM_RESEARCH_WATCHLIST,
     build_long_term_ideas,
     select_long_term_candidates,
 )
@@ -895,6 +896,22 @@ if symbol_input:
                     "stocks, so results are not padded with weak or synthetic candidates. Independently check balance-sheet "
                     "quality, order book, litigation, liquidity, and company filings before acting."
                 )
+            st.subheader("Research watchlist from prior discussion")
+            st.caption(
+                "These 10 names are shown separately from the live-screen results. The first eight were candidates in a "
+                "prior screen snapshot; the final two are exploratory. This list is not revalidated by the live filters, "
+                "and none of the entries has a verified order-book or legal review. Research focus is a checklist, not a "
+                "claim that a risk or growth catalyst has been confirmed."
+            )
+            st.dataframe(
+                pd.DataFrame(LONG_TERM_RESEARCH_WATCHLIST),
+                width="stretch",
+                hide_index=True,
+            )
+            st.link_button(
+                "Review NSE corporate filings",
+                "https://www.nseindia.com/companies-listing/corporate-filings-announcements",
+            )
             st.stop()
 
         ticker = normalize_stock_symbol(symbol_input, exchange=exchange)

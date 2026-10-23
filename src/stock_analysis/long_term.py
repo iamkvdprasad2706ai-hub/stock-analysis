@@ -27,6 +27,69 @@ LONG_TERM_COLUMNS = [
     "Screening evidence",
 ]
 
+LONG_TERM_RESEARCH_WATCHLIST = (
+    {
+        "Symbol": "MANORAMA",
+        "Company": "Manorama Industries",
+        "Research focus": "Specialty fats and ingredients; check sourcing, customer concentration, working capital, and capacity utilization.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "CORONA",
+        "Company": "Corona Remedies",
+        "Research focus": "Pharmaceutical formulations; check product concentration, regulatory disclosures, cash conversion, and valuation.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "SHAILY",
+        "Company": "Shaily Engineering Plastics",
+        "Research focus": "Precision plastics and healthcare products; check customer concentration, capex returns, and cash flow.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "BLUEJET",
+        "Company": "Blue Jet Healthcare",
+        "Research focus": "Pharmaceutical intermediates; check product and customer concentration and regulatory compliance.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "OBSCP",
+        "Company": "OBSC Perfection",
+        "Research focus": "Precision engineering; check customer concentration, utilization, order conversion, and receivables.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "FILATEX",
+        "Company": "Filatex India",
+        "Research focus": "Polyester filament yarn; check industry-cycle exposure, raw-material spreads, debt, and margins.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "GUJTHEM",
+        "Company": "Gujarat Themis Biosyn",
+        "Research focus": "Fermentation-based pharma ingredients; check product concentration, regulatory compliance, and earnings quality.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "BELRISE",
+        "Company": "Belrise Industries",
+        "Research focus": "Automotive components; check OEM concentration, leverage, working capital, and valuation.",
+        "Basis": "Prior screen candidate; recheck live eligibility",
+    },
+    {
+        "Symbol": "RACLGEAR",
+        "Company": "RACL Geartech",
+        "Research focus": "Precision gears and automotive components; verify current screen metrics, cash flow, customer concentration, and export exposure.",
+        "Basis": "Exploratory; live-screen filters not verified",
+    },
+    {
+        "Symbol": "AMIORG",
+        "Company": "Ami Organics",
+        "Research focus": "Specialty chemicals and pharma intermediates; verify current screen metrics, plant utilization, customer mix, and compliance.",
+        "Basis": "Exploratory; live-screen filters not verified",
+    },
+)
+
 
 def select_long_term_candidates(
     screen_data: pd.DataFrame,

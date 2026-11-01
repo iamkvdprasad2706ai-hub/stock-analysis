@@ -446,7 +446,7 @@ if workspace == "US Stocks":
     )
 
     if "ticker" in st.query_params:
-        linked_ticker = str(st.query_params["ticker"]).strip().upper()
+        linked_ticker = str(st.query_params["ticker"]).strip()
         if linked_ticker:
             st.session_state["us_stock_search"] = linked_ticker
 
@@ -532,6 +532,22 @@ if workspace == "US Stocks":
                         ):
                             st.session_state["us_stock_search"] = ticker
                             st.query_params["ticker"] = ticker
+                            st.query_params["period"] = period
+                            st.rerun()
+                st.caption("Company links — click a company name to search by company name.")
+                company_columns = st.columns(5)
+                for position, row in enumerate(sector_rows.to_dict("records")):
+                    ticker = str(row["Ticker"])
+                    company = str(row["Company"])
+                    with company_columns[position % 5]:
+                        if st.button(
+                            company,
+                            key=f"us_company_link_{ticker}",
+                            use_container_width=True,
+                            help=f"Search {company} by company name and show full analysis",
+                        ):
+                            st.session_state["us_stock_search"] = company
+                            st.query_params["ticker"] = company
                             st.query_params["period"] = period
                             st.rerun()
                 st.dataframe(sector_rows, width="stretch", hide_index=True)
@@ -1551,6 +1567,56 @@ if symbol_input:
             st.markdown("### Why this view?")
             for reason in recommendation["reasons"]:
                 st.markdown(f"- {reason}")
+
+        if is_us_stock:
+            st.markdown("---")
+            st.subheader("Recommended U.S. stocks")
+            st.caption("Click a ticker or company name to copy it into search and show the full analysis.")
+
+            with st.spinner("Loading recommended U.S. stocks..."):
+                recommended_stocks = cached_us_buying_zone()
+
+            if recommended_stocks.empty:
+                st.info("Recommended U.S. stocks are temporarily unavailable.")
+            else:
+                sorted_recommendations = recommended_stocks.copy()
+                sorted_recommendations["_buy"] = sorted_recommendations["Recommendation"].eq("BUY")
+                sorted_recommendations = sorted_recommendations.sort_values(
+                    ["_buy", "Confidence score (%)"],
+                    ascending=[False, False],
+                ).drop(columns="_buy")
+                recommended_view = sorted_recommendations.head(10)
+
+                for _, recommended_row in recommended_view.iterrows():
+                    recommended_ticker = str(recommended_row["Ticker"])
+                    recommended_company = str(recommended_row["Company"])
+                    ticker_col, company_col, action_col = st.columns([1, 3, 1])
+                    with ticker_col:
+                        if st.button(
+                            recommended_ticker,
+                            key=f"us_reco_ticker_{recommended_ticker}",
+                            use_container_width=True,
+                            help=f"Analyze {recommended_ticker}",
+                        ):
+                            st.session_state["us_stock_search"] = recommended_ticker
+                            st.query_params["ticker"] = recommended_ticker
+                            st.query_params["period"] = period
+                            st.rerun()
+                    with company_col:
+                        if st.button(
+                            recommended_company,
+                            key=f"us_reco_company_{recommended_ticker}",
+                            use_container_width=True,
+                            help=f"Search {recommended_company} and analyze the company",
+                        ):
+                            st.session_state["us_stock_search"] = recommended_company
+                            st.query_params["ticker"] = recommended_company
+                            st.query_params["period"] = period
+                            st.rerun()
+                    with action_col:
+                        st.markdown(
+                            f"**{recommended_row['Recommendation']}** · {recommended_row['Confidence score (%)']}%"
+                        )
 
     except ValueError as exc:
         st.error(str(exc))

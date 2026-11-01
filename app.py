@@ -520,21 +520,7 @@ if workspace == "US Stocks":
                     st.info("No verified rows were available for this sector.")
                     continue
                 st.markdown(f"#### {sector}")
-                st.caption("Ticker links — click to copy the ticker into search and open full analysis.")
-                ticker_columns = st.columns(5)
-                for position, ticker in enumerate(sector_rows["Ticker"].tolist()):
-                    with ticker_columns[position % 5]:
-                        if st.button(
-                            ticker,
-                            key=f"us_stock_link_{ticker}",
-                            use_container_width=True,
-                            help=f"Copy {ticker} into stock search and show full analysis",
-                        ):
-                            st.session_state["us_stock_search"] = ticker
-                            st.query_params["ticker"] = ticker
-                            st.query_params["period"] = period
-                            st.rerun()
-                st.caption("Company links — click a company name to search by company name.")
+                st.caption("Company links — click a company name to open full stock analysis.")
                 company_columns = st.columns(5)
                 for position, row in enumerate(sector_rows.to_dict("records")):
                     ticker = str(row["Ticker"])
@@ -550,7 +536,11 @@ if workspace == "US Stocks":
                             st.query_params["ticker"] = company
                             st.query_params["period"] = period
                             st.rerun()
-                st.dataframe(sector_rows, width="stretch", hide_index=True)
+                st.dataframe(
+                    sector_rows.drop(columns=["Ticker"], errors="ignore"),
+                    width="stretch",
+                    hide_index=True,
+                )
 
             st.caption(
                 "Method note: positive ROE, profit margins, revenue growth, valuation, debt profile, and proximity to "
@@ -1571,7 +1561,7 @@ if symbol_input:
         if is_us_stock:
             st.markdown("---")
             st.subheader("Recommended U.S. stocks")
-            st.caption("Click a ticker or company name to copy it into search and show the full analysis.")
+            st.caption("Click a company name to copy it into search and show the full analysis.")
 
             with st.spinner("Loading recommended U.S. stocks..."):
                 recommended_stocks = cached_us_buying_zone()
@@ -1590,18 +1580,7 @@ if symbol_input:
                 for _, recommended_row in recommended_view.iterrows():
                     recommended_ticker = str(recommended_row["Ticker"])
                     recommended_company = str(recommended_row["Company"])
-                    ticker_col, company_col, action_col = st.columns([1, 3, 1])
-                    with ticker_col:
-                        if st.button(
-                            recommended_ticker,
-                            key=f"us_reco_ticker_{recommended_ticker}",
-                            use_container_width=True,
-                            help=f"Analyze {recommended_ticker}",
-                        ):
-                            st.session_state["us_stock_search"] = recommended_ticker
-                            st.query_params["ticker"] = recommended_ticker
-                            st.query_params["period"] = period
-                            st.rerun()
+                    company_col, action_col = st.columns([4, 1])
                     with company_col:
                         if st.button(
                             recommended_company,

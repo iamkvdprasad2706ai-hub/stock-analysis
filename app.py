@@ -445,7 +445,17 @@ if workspace == "US Stocks":
         "A focused 20-name universe: 5 Technology, 5 Banking, 5 Quantum Computing, and 5 Other-sector stocks."
     )
 
+    if "ticker" in st.query_params:
+        linked_ticker = str(st.query_params["ticker"]).strip().upper()
+        if linked_ticker:
+            st.session_state["us_stock_search"] = linked_ticker
+
     search_col, period_col = st.columns([3, 1])
+    period_options = ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"]
+    if "period" in st.query_params:
+        linked_period = str(st.query_params["period"]).strip()
+        if linked_period in period_options:
+            st.session_state["us_stock_period"] = linked_period
     with search_col:
         us_search = st.text_input(
             "Search any U.S. stock",
@@ -455,8 +465,8 @@ if workspace == "US Stocks":
     with period_col:
         period = st.selectbox(
             "Time range",
-            ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"],
-            index=3,
+            period_options,
+            index=period_options.index(st.session_state.get("us_stock_period", "1y")),
             key="us_stock_period",
         )
 
@@ -469,8 +479,12 @@ if workspace == "US Stocks":
     if clear_us_stock:
         st.session_state["us_stock_search"] = ""
         us_search = ""
+        if "ticker" in st.query_params:
+            del st.query_params["ticker"]
     if analyze_us_stock and us_search.strip():
         st.session_state["us_stock_search"] = us_search.strip()
+        st.query_params["ticker"] = us_search.strip()
+        st.query_params["period"] = period
     if us_search.strip():
         symbol_input = us_search.strip()
     else:
@@ -506,6 +520,18 @@ if workspace == "US Stocks":
                     st.info("No verified rows were available for this sector.")
                     continue
                 st.markdown(f"#### {sector}")
+                ticker_columns = st.columns(5)
+                for position, ticker in enumerate(sector_rows["Ticker"].tolist()):
+                    with ticker_columns[position % 5]:
+                        if st.button(
+                            f"Analyze {ticker}",
+                            key=f"us_stock_link_{ticker}",
+                            use_container_width=True,
+                        ):
+                            st.session_state["us_stock_search"] = ticker
+                            st.query_params["ticker"] = ticker
+                            st.query_params["period"] = period
+                            st.rerun()
                 st.dataframe(sector_rows, width="stretch", hide_index=True)
 
             st.caption(

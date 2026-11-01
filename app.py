@@ -520,13 +520,15 @@ if workspace == "US Stocks":
                     st.info("No verified rows were available for this sector.")
                     continue
                 st.markdown(f"#### {sector}")
+                st.caption("Ticker links — click to copy the ticker into search and open full analysis.")
                 ticker_columns = st.columns(5)
                 for position, ticker in enumerate(sector_rows["Ticker"].tolist()):
                     with ticker_columns[position % 5]:
                         if st.button(
-                            f"Analyze {ticker}",
+                            ticker,
                             key=f"us_stock_link_{ticker}",
                             use_container_width=True,
+                            help=f"Copy {ticker} into stock search and show full analysis",
                         ):
                             st.session_state["us_stock_search"] = ticker
                             st.query_params["ticker"] = ticker

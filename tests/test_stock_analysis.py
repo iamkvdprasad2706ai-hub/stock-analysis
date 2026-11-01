@@ -11,7 +11,7 @@ from stock_analysis.long_term import (
     select_long_term_candidates,
 )
 from stock_analysis.home_dashboard import build_market_overview
-from stock_analysis.us_stocks import US_SECTOR_UNIVERSES
+from stock_analysis.us_stocks import US_SECTOR_UNIVERSES, US_STOCK_COLUMNS
 
 
 def test_normalize_stock_symbol_converts_to_nse_format():
@@ -37,6 +37,7 @@ def test_us_sector_universe_has_20_requested_names():
         "Quantum Computing": 5,
         "Other sectors": 5,
     }
+    assert "Recommendation" in US_STOCK_COLUMNS
 
 
 def test_load_stock_data_maps_fifteen_year_lookback_to_start_date(monkeypatch):

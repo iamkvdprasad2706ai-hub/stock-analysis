@@ -20,6 +20,7 @@ US_STOCK_COLUMNS = [
     "Ticker",
     "Company",
     "Setup status",
+    "Recommendation",
     "CMP ($)",
     "Entry zone ($)",
     "P/E",
@@ -83,6 +84,7 @@ def fetch_us_buying_zone() -> pd.DataFrame:
                     "Company": info.get("shortName") or info.get("longName") or ticker,
                     "Sector": sector,
                     "Setup status": "Unverified — insufficient data",
+                    "Recommendation": "HOLD",
                     "Confidence score (%)": 0,
                     "_sector": sector,
                 })
@@ -158,6 +160,7 @@ def fetch_us_buying_zone() -> pd.DataFrame:
                 "Company": info.get("shortName") or info.get("longName") or ticker,
                 "Sector": sector,
                 "Setup status": status,
+                "Recommendation": "BUY" if entry_candidate else "HOLD",
                 "CMP ($)": round(price, 2),
                 "Entry zone ($)": f"{min(average_50, average_200):.2f}–{max(average_50, average_200):.2f}",
                 "P/E": None if pe is None else round(pe, 2),

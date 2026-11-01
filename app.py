@@ -1439,12 +1439,17 @@ if symbol_input:
             if is_us_stock:
                 fii_df = pd.DataFrame()
                 bulk_df = pd.DataFrame()
+                st.caption(
+                    "U.S. recommendation: generated from price trend, moving averages, RSI, volume, company profile, "
+                    "and available 15-year Yahoo Finance history. Entry, targets, and stop loss are model scenarios in USD."
+                )
             else:
                 fii_df = fetch_fii_data(limit=12)
                 bulk_df = fetch_bulk_deals(limit=12)
             recommendation_history = cached_stock_history(ticker, "15y", exchange)
             recommendation = generate_recommendations(recommendation_history, profile=profile, fii_df=fii_df, bulk_df=bulk_df)
-            st.caption("Recommendation signals use up to 15 years of available price history; the chart range above does not change this lookback.")
+            if not is_us_stock:
+                st.caption("Recommendation signals use up to 15 years of available price history; the chart range above does not change this lookback.")
 
             st.subheader(f"{profile.get('longName') or profile.get('shortName') or ticker}")
 
@@ -1461,7 +1466,7 @@ if symbol_input:
             risk_per_share = entry_price - stop_loss if entry_price is not None and stop_loss is not None else 0.0
             reward_per_share = targets[2] - entry_price if entry_price is not None and len(targets) >= 3 else 0.0
             risk_reward = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
-            holding_style = "Long-term analysis"
+            holding_style = "U.S. long-term analysis" if is_us_stock else "Long-term analysis"
 
             st.markdown(
                 f"<div class='recommendation-header'>"
@@ -1499,14 +1504,18 @@ if symbol_input:
             summary_change_text = f"{summary_change:+.2f}%" if summary_change is not None else "N/A"
             summary_rsi = recommendation.get("rsi")
             summary_rsi_text = f"{summary_rsi:.1f}" if summary_rsi is not None else "N/A"
-            summary_flow = str(recommendation.get("institutional_flow", "unknown")).capitalize()
+            summary_flow = (
+                "U.S. ownership data"
+                if is_us_stock
+                else str(recommendation.get("institutional_flow", "unknown")).capitalize()
+            )
             summary_price = recommendation.get("entry_price")
             summary_price_text = format_selected_currency(summary_price) if summary_price is not None else "N/A"
             st.markdown(
                 f"<div class='summary-card'>"
                 f"<div class='summary-title'>Summary</div>"
                 f"<div class='summary-text'><strong class='{action_class}'>{action}</strong> view at <strong>{summary_price_text}</strong>.</div>"
-                f"<div class='trade-note'><strong>One-year return:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>Institutional flow:</strong> {summary_flow} &nbsp; | &nbsp; <strong>Risk/reward:</strong> 1:{risk_reward:.2f}</div>"
+                f"<div class='trade-note'><strong>One-year return:</strong> {summary_change_text} &nbsp; | &nbsp; <strong>RSI:</strong> {summary_rsi_text} &nbsp; | &nbsp; <strong>{'Ownership' if is_us_stock else 'Institutional flow'}:</strong> {summary_flow} &nbsp; | &nbsp; <strong>Risk/reward:</strong> 1:{risk_reward:.2f}</div>"
                 f"</div>",
                 unsafe_allow_html=True,
             )

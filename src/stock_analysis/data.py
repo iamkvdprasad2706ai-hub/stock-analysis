@@ -1,0 +1,456 @@
+from __future__ import annotations
+
+import io
+import math
+import os
+import re
+import xml.etree.ElementTree as ET
+import warnings
+from datetime import datetime
+
+import pandas as pd
+import requests
+import yfinance as yf
+import nsepython
+from urllib3.exceptions import InsecureRequestWarning
+
+warnings.filterwarnings("ignore", category=Warning)
+warnings.filterwarnings("ignore", category=InsecureRequestWarning)
+
+
+def get_optional_ai_summary(stock_name: str, summary: dict, profile: dict | None = None, fii_df: pd.DataFrame | None = None, bulk_df: pd.DataFrame | None = None) -> str:
+    """Use OpenAI only when the user has configured a local API key. The key remains outside the repo."""
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return (
+            "Heuristic recommendation available: "
+            f"{stock_name} is showing {summary.get('percent_change', 0):.2f}% change with "
+            f"momentum and institutional flow signals as the primary decision inputs."
+        )
+
+    try:
+        from openai import OpenAI
+    except Exception:
+        return "OpenAI support is configured but the client library is not installed in the current environment."
+
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    client = OpenAI(api_key=api_key)
+    sector = (profile or {}).get("sector") or "N/A"
+    fii_net = float((fii_df["netValue"].sum()) if fii_df is not None and not fii_df.empty and "netValue" in fii_df.columns else 0.0)
+    bulk_buy = int((bulk_df["Buy/Sell"].str.upper() == "BUY").sum()) if bulk_df is not None and not bulk_df.empty and "Buy/Sell" in bulk_df.columns else 0
+    bulk_sell = int((bulk_df["Buy/Sell"].str.upper() == "SELL").sum()) if bulk_df is not None and not bulk_df.empty and "Buy/Sell" in bulk_df.columns else 0
+
+    prompt = (
+        f"Give a concise market view for {stock_name} in sector {sector}. "
+        f"Current price change is {summary.get('percent_change', 0):.2f}%. "
+        f"FII/DII net flow is {fii_net:.2f} crore. Bulk buy count is {bulk_buy} and bulk sell count is {bulk_sell}. "
+        "Answer with 3 short bullets covering trend, risk, and action. Keep it factual and brief."
+    )
+
+    response = client.responses.create(
+        model=model,
+        input=prompt,
+    )
+    return response.output_text.strip() if hasattr(response, "output_text") else str(response)
+
+
+def normalize_stock_symbol(raw_symbol: str, exchange: str = "NSE") -> str:
+    """Normalize a stock ticker or company name into a Yahoo Finance symbol."""
+    if raw_symbol is None:
+        raise ValueError("Stock symbol or name is required.")
+
+    exchange_suffixes = {"NSE": ".NS", "BSE": ".BO"}
+    exchange_name = str(exchange).strip().upper()
+    if exchange_name == "US":
+        cleaned = str(raw_symbol).strip()
+        if not cleaned:
+            raise ValueError("Stock symbol or name is required.")
+        try:
+            search = yf.Search(cleaned, max_results=1)
+            quotes = getattr(search, "quotes", []) or []
+            if quotes:
+                return str(quotes[0].get("symbol") or "").upper()
+        except Exception:
+            pass
+        explicit_ticker = re.sub(r"[^A-Z0-9.^-]", "", cleaned.upper())
+        return explicit_ticker if explicit_ticker else cleaned.upper().replace(" ", "-")
+    if exchange_name not in exchange_suffixes:
+        raise ValueError("Exchange must be either 'NSE' or 'BSE'.")
+
+    cleaned = str(raw_symbol).strip()
+    if not cleaned:
+        raise ValueError("Stock symbol or name is required.")
+
+    candidate = cleaned.upper()
+    if candidate.endswith((".NS", ".BO")):
+        return candidate
+
+    candidate = re.sub(r"[^A-Z0-9\s\-]", "", candidate)
+    base = re.split(r"[\s\-/]+", candidate.strip())[0]
+    if not base:
+        raise ValueError("Could not infer a stock symbol from the provided value.")
+    return f"{base}{exchange_suffixes[exchange_name]}"
+
+
+def _build_sample_data(symbol: str) -> pd.DataFrame:
+    dates = pd.date_range(end=datetime.today(), periods=120, freq="D")
+    start_price = 100.0
+    drift = 0.7 / 100
+    noise = 0.03
+    prices = [start_price]
+
+    for index in range(1, len(dates)):
+        last = prices[-1]
+        random_step = noise * (0.5 - (index % 2))
+        next_price = max(last * (1 + drift + random_step), 10.0)
+        prices.append(float(next_price))
+
+    sample = pd.DataFrame({
+        "date": dates,
+        "open": [p * 0.995 for p in prices],
+        "high": [p * 1.015 for p in prices],
+        "low": [p * 0.985 for p in prices],
+        "close": prices,
+        "volume": [1000000 + i * 500 for i in range(len(prices))],
+    })
+    sample["symbol"] = symbol.upper()
+    return sample
+
+
+def load_stock_data(symbol: str, period: str = "1y", interval: str = "1d", exchange: str = "NSE") -> pd.DataFrame:
+    """Load stock OHLC data, supporting custom year lookbacks up to Yahoo's available history."""
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
+
+    try:
+        years_match = re.fullmatch(r"(\d+)y", period)
+        history_options = {"period": period} if years_match is None else {
+            "start": datetime.today() - pd.DateOffset(years=int(years_match.group(1)))
+        }
+        history = yf.Ticker(ticker).history(interval=interval, auto_adjust=True, **history_options)
+    except Exception:
+        sample = _build_sample_data(ticker)
+        sample.attrs["synthetic"] = True
+        sample.attrs["source"] = "synthetic_fallback"
+        sample.attrs["data_source"] = "synthetic_fallback"
+        return sample
+
+    if history.empty:
+        sample = _build_sample_data(ticker)
+        sample.attrs["synthetic"] = True
+        sample.attrs["source"] = "synthetic_fallback"
+        sample.attrs["data_source"] = "synthetic_fallback"
+        return sample
+
+    data = history.reset_index()
+    if "Date" in data.columns:
+        data = data.rename(columns={"Date": "date"})
+    data["symbol"] = ticker
+    result = data[["symbol", "date", "Open", "High", "Low", "Close", "Volume"]].rename(
+        columns={
+            "Open": "open",
+            "High": "high",
+            "Low": "low",
+            "Close": "close",
+            "Volume": "volume",
+        }
+    )
+    result.attrs["synthetic"] = False
+    result.attrs["source"] = "yahoo_finance"
+    result.attrs["data_source"] = "yahoo_finance"
+    return result
+
+
+def fetch_stock_sector(symbol: str, exchange: str = "NSE") -> str:
+    """Return Yahoo Finance's sector classification without downloading price history."""
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
+    try:
+        info = yf.Ticker(ticker).info or {}
+        return str(info.get("sector") or "Unclassified")
+    except Exception:
+        return "Unclassified"
+
+
+def fetch_market_context() -> pd.DataFrame:
+    """Fetch one-year trend snapshots for Indian and major global market indicators."""
+    indicators = {
+        "NIFTY 50": "^NSEI",
+        "S&P 500": "^GSPC",
+        "NASDAQ Composite": "^IXIC",
+        "CBOE VIX": "^VIX",
+        "Gold": "GC=F",
+        "Crude oil": "CL=F",
+        "USD/INR": "INR=X",
+    }
+    rows = []
+    for name, ticker in indicators.items():
+        try:
+            history = yf.Ticker(ticker).history(period="1y", interval="1d", auto_adjust=True)
+            close = pd.to_numeric(history.get("Close"), errors="coerce").dropna()
+            if close.empty:
+                continue
+            latest = float(close.iloc[-1])
+            year_return = (latest / float(close.iloc[0]) - 1) * 100 if len(close) > 1 else 0.0
+            average_200d = float(close.tail(200).mean())
+            trend = "Bullish" if latest >= average_200d else "Bearish"
+            rows.append(
+                {
+                    "Market": name,
+                    "Latest": latest,
+                    "One-year return (%)": round(year_return, 2),
+                    "Trend vs 200-day average": trend,
+                    "Ticker": ticker,
+                }
+            )
+        except Exception:
+            continue
+    return pd.DataFrame(rows, columns=["Market", "Latest", "One-year return (%)", "Trend vs 200-day average", "Ticker"])
+
+
+def fetch_market_news_queries(queries: dict[str, str], limit: int = 3) -> pd.DataFrame:
+    """Fetch source-linked, topic-specific news results for context and human review."""
+    columns = ["Topic", "Headline", "Source", "Published", "URL"]
+    rows = []
+    for topic, query in queries.items():
+        try:
+            response = requests.get(
+                "https://news.google.com/rss/search",
+                params={"q": query, "hl": "en-IN", "gl": "IN", "ceid": "IN:en"},
+                headers={"User-Agent": "Mozilla/5.0 (compatible; StockAnalysisDashboard/1.0)"},
+                timeout=10,
+            )
+            response.raise_for_status()
+            root = ET.fromstring(response.content)
+            for item in root.findall("./channel/item")[:limit]:
+                source = item.find("source")
+                rows.append(
+                    {
+                        "Topic": topic,
+                        "Headline": item.findtext("title", default=""),
+                        "Source": source.text if source is not None and source.text else "News source",
+                        "Published": item.findtext("pubDate", default=""),
+                        "URL": item.findtext("link", default=""),
+                    }
+                )
+        except Exception:
+            continue
+    return pd.DataFrame(rows, columns=columns)
+
+
+def fetch_market_news(limit: int = 5) -> pd.DataFrame:
+    """Fetch source-linked India policy and global market headlines for human review."""
+    topics = {
+        "India policy and economy": "India government policy economy development markets",
+        "Global markets and geopolitics": "global markets geopolitics trade policy economy",
+    }
+    return fetch_market_news_queries(topics, limit=limit)
+
+
+def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
+    """Retrieve a complete, normalized market profile with resilient Yahoo fallbacks."""
+    ticker = normalize_stock_symbol(symbol, exchange=exchange)
+    symbol_name = ticker.rsplit(".", 1)[0]
+    if exchange == "US":
+        exchange_name = "NASDAQ/NYSE/US"
+        website = f"https://finance.yahoo.com/quote/{ticker}/"
+        fallback_currency = "USD"
+    else:
+        exchange_name = "BSE" if ticker.endswith(".BO") else "NSE"
+        website = (
+            f"https://www.bseindia.com/stock-share-price/{symbol_name}/"
+            if exchange_name == "BSE"
+            else f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}"
+        )
+        fallback_currency = "INR"
+    profile = {
+        "symbol": ticker,
+        "shortName": symbol_name,
+        "longName": symbol_name,
+        "sector": "N/A",
+        "industry": "N/A",
+        "marketCap": None,
+        "currency": fallback_currency,
+        "trailingPE": None,
+        "forwardPE": None,
+        "dividendYield": None,
+        "beta": None,
+        "fiftyTwoWeekHigh": None,
+        "fiftyTwoWeekLow": None,
+        "regularMarketPrice": None,
+        "targetMeanPrice": None,
+        "bookValue": None,
+        "priceToBook": None,
+        "averageVolume": None,
+        "website": website,
+        "exchange": exchange_name,
+    }
+
+    def first_value(*values):
+        for value in values:
+            if value is not None and value != "" and not (isinstance(value, float) and math.isnan(value)):
+                return value
+        return None
+
+    try:
+        market_ticker = yf.Ticker(ticker)
+        info = market_ticker.info or {}
+        fast_info = market_ticker.fast_info or {}
+        history = pd.DataFrame()
+        try:
+            history = market_ticker.history(period="1y", interval="1d", auto_adjust=False)
+        except Exception:
+            pass
+
+        history_close = pd.to_numeric(history.get("Close"), errors="coerce").dropna() if not history.empty else pd.Series(dtype=float)
+        history_price = float(history_close.iloc[-1]) if not history_close.empty else None
+
+        profile.update(
+            {
+                "shortName": first_value(info.get("shortName"), symbol_name),
+                "longName": first_value(info.get("longName"), info.get("shortName"), symbol_name),
+                "sector": first_value(info.get("sector"), "N/A"),
+                "industry": first_value(info.get("industry"), "N/A"),
+                "marketCap": first_value(info.get("marketCap")),
+                "currency": first_value(info.get("currency"), fallback_currency),
+                "trailingPE": first_value(info.get("trailingPE")),
+                "forwardPE": first_value(info.get("forwardPE")),
+                "dividendYield": first_value(info.get("dividendYield")),
+                "beta": first_value(info.get("beta")),
+                "fiftyTwoWeekHigh": first_value(info.get("fiftyTwoWeekHigh")),
+                "fiftyTwoWeekLow": first_value(info.get("fiftyTwoWeekLow")),
+                "regularMarketPrice": first_value(info.get("regularMarketPrice"), fast_info.get("last_price"), history_price),
+                "targetMeanPrice": first_value(info.get("targetMeanPrice")),
+                "bookValue": first_value(info.get("bookValue")),
+                "priceToBook": first_value(info.get("priceToBook")),
+                "averageVolume": first_value(info.get("averageVolume"), fast_info.get("three_month_average_volume")),
+                "heldPercentInstitutions": first_value(info.get("heldPercentInstitutions")),
+                "heldPercentInsiders": first_value(info.get("heldPercentInsiders")),
+                "sharesShort": first_value(info.get("sharesShort")),
+                "sharesShortPriorMonth": first_value(info.get("sharesShortPriorMonth")),
+                "shortRatio": first_value(info.get("shortRatio")),
+                "website": first_value(info.get("website"), profile["website"]),
+                "exchange": exchange_name,
+            }
+        )
+
+        if not history_close.empty:
+            profile["fiftyTwoWeekHigh"] = first_value(profile["fiftyTwoWeekHigh"], float(history_close.max()))
+            profile["fiftyTwoWeekLow"] = first_value(profile["fiftyTwoWeekLow"], float(history_close.min()))
+
+        shares_outstanding = first_value(info.get("sharesOutstanding"), info.get("impliedSharesOutstanding"))
+        if profile["marketCap"] is None and shares_outstanding is not None and profile["regularMarketPrice"] is not None:
+            profile["marketCap"] = float(shares_outstanding) * float(profile["regularMarketPrice"])
+
+        if profile["dividendYield"] is not None and float(profile["dividendYield"]) > 1:
+            profile["dividendYield"] = float(profile["dividendYield"]) / 100
+        return profile
+    except Exception:
+        return profile
+
+
+def fetch_fii_data(limit: int = 10) -> pd.DataFrame:
+    """Return recent FII/DII net investment flow from the NSE institutional flow endpoint."""
+    try:
+        fii_df = nsepython.nse_fiidii()
+        if fii_df.empty:
+            return pd.DataFrame(columns=["date", "category", "buyValue", "sellValue", "netValue"])
+
+        fii_df = fii_df.copy()
+        fii_df["date"] = pd.to_datetime(fii_df["date"], format="%d-%b-%Y", errors="coerce")
+        fii_df["buyValue"] = pd.to_numeric(fii_df["buyValue"], errors="coerce")
+        fii_df["sellValue"] = pd.to_numeric(fii_df["sellValue"], errors="coerce")
+        fii_df["netValue"] = pd.to_numeric(fii_df["netValue"], errors="coerce")
+        fii_df = fii_df.sort_values("date", ascending=False).head(limit).reset_index(drop=True)
+        return fii_df
+    except Exception:
+        fallback = pd.DataFrame(
+            {
+                "date": [pd.Timestamp(datetime.today())],
+                "category": ["FII/FPI"],
+                "buyValue": [0.0],
+                "sellValue": [0.0],
+                "netValue": [0.0],
+            }
+        )
+        return fallback
+
+
+def fetch_screener_fii_dii_top_stocks(limit: int = 10, page: int = 1) -> pd.DataFrame:
+    """Fetch the linked Screener.in FII/DII buying screen and return its top rows."""
+    url = "https://www.screener.in/screens/1340210/fii-and-dii-buying-stocks/"
+    if page > 1:
+        url = f"{url}?page={page}"
+    empty_columns = ["Symbol", "Company", "CMP (Rs.)", "P/E", "Market Cap (Rs. Cr)", "ROCE (%)", "FII change (%)", "DII change (%)"]
+    try:
+        response = requests.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StockAnalysisDashboard/1.0)"},
+            timeout=30,
+            verify=False,
+        )
+        response.raise_for_status()
+        tables = pd.read_html(io.StringIO(response.text))
+        screen = next(table for table in tables if "Chg in FII Hold  %" in table.columns)
+        symbols = re.findall(r'href="/company/([^/]+)/"', response.text)
+        company_names = [re.sub(r"<[^>]+>", "", name).strip() for name in re.findall(r'<a href="/company/[^/]+/"[^>]*>(.*?)</a>', response.text)]
+        row_count = min(len(screen), len(symbols), len(company_names))
+        if row_count == 0:
+            return pd.DataFrame(columns=empty_columns)
+        screen = screen.head(row_count).copy()
+        screen.insert(1, "Symbol", [symbol.upper() for symbol in symbols[:row_count]])
+        screen["Company"] = company_names[:row_count]
+        screen = screen[screen["Symbol"].str.match(r"^[A-Z][A-Z0-9]+$", na=False)].head(limit).copy()
+        screen = screen.rename(
+            columns={
+                "CMP  Rs.": "CMP (Rs.)",
+                "Mar Cap  Rs.Cr.": "Market Cap (Rs. Cr)",
+                "ROCE  %": "ROCE (%)",
+                "Chg in FII Hold  %": "FII change (%)",
+                "Chg in DII Hold  %": "DII change (%)",
+            }
+        )
+        selected = [column for column in empty_columns if column in screen.columns]
+        result = screen[selected].copy()
+        for column in selected[2:]:
+            result[column] = pd.to_numeric(result[column], errors="coerce")
+        return result.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(columns=empty_columns)
+
+
+def fetch_screener_fii_dii_penny_stocks(limit: int = 10) -> pd.DataFrame:
+    """Return the lowest-priced stocks from all pages of the linked FII/DII screen."""
+    pages = [fetch_screener_fii_dii_top_stocks(limit=100, page=page) for page in range(1, 5)]
+    candidates = pd.concat(pages, ignore_index=True) if pages else pd.DataFrame()
+    if candidates.empty or "CMP (Rs.)" not in candidates.columns:
+        return pd.DataFrame(columns=candidates.columns if not candidates.empty else ["Symbol", "Company", "CMP (Rs.)"])
+    candidates["CMP (Rs.)"] = pd.to_numeric(candidates["CMP (Rs.)"], errors="coerce")
+    candidates["FII change (%)"] = pd.to_numeric(candidates["FII change (%)"], errors="coerce")
+    candidates["DII change (%)"] = pd.to_numeric(candidates["DII change (%)"], errors="coerce")
+    candidates["Combined ownership change (%)"] = candidates["FII change (%)"].fillna(0) + candidates["DII change (%)"].fillna(0)
+    return candidates.sort_values(["CMP (Rs.)", "Combined ownership change (%)"], ascending=[True, False]).head(limit).reset_index(drop=True)
+
+
+def fetch_bulk_deals(limit: int = 10) -> pd.DataFrame:
+    """Return recent bulk deals from the NSE archive CSV."""
+    url = "https://archives.nseindia.com/content/equities/bulk.csv"
+    try:
+        response = requests.get(url, timeout=30, verify=False)
+        response.raise_for_status()
+        payload = pd.read_csv(io.StringIO(response.text), low_memory=False)
+        payload = payload.head(limit).copy()
+        if "Date" in payload.columns:
+            payload["Date"] = pd.to_datetime(payload["Date"], format="%d-%b-%Y", errors="coerce")
+        return payload.reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame(
+            {
+                "Date": [pd.Timestamp(datetime.today())],
+                "Symbol": ["N/A"],
+                "Security Name": ["N/A"],
+                "Client Name": ["N/A"],
+                "Buy/Sell": ["BUY"],
+                "Quantity Traded": [0],
+                "Trade Price / Wght. Avg. Price": [0.0],
+                "Remarks": ["Fallback"],
+            }
+        )

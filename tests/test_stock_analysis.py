@@ -11,6 +11,7 @@ from stock_analysis.long_term import (
     select_long_term_candidates,
 )
 from stock_analysis.home_dashboard import build_market_overview
+from stock_analysis.us_stocks import US_SECTOR_UNIVERSES
 
 
 def test_normalize_stock_symbol_converts_to_nse_format():
@@ -23,6 +24,19 @@ def test_normalize_stock_symbol_supports_bse_and_explicit_exchange_suffixes():
     assert normalize_stock_symbol("reliance", exchange="BSE") == "RELIANCE.BO"
     assert normalize_stock_symbol("TCS.BO") == "TCS.BO"
     assert normalize_stock_symbol("TCS.NS", exchange="BSE") == "TCS.NS"
+
+
+def test_normalize_stock_symbol_supports_us_tickers():
+    assert normalize_stock_symbol("msft", exchange="US") == "MSFT"
+
+
+def test_us_sector_universe_has_20_requested_names():
+    assert {name: len(tickers) for name, tickers in US_SECTOR_UNIVERSES.items()} == {
+        "Technology": 5,
+        "Banking": 5,
+        "Quantum Computing": 5,
+        "Other sectors": 5,
+    }
 
 
 def test_load_stock_data_maps_fifteen_year_lookback_to_start_date(monkeypatch):

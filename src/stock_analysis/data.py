@@ -61,6 +61,19 @@ def normalize_stock_symbol(raw_symbol: str, exchange: str = "NSE") -> str:
 
     exchange_suffixes = {"NSE": ".NS", "BSE": ".BO"}
     exchange_name = str(exchange).strip().upper()
+    if exchange_name == "US":
+        cleaned = str(raw_symbol).strip()
+        if not cleaned:
+            raise ValueError("Stock symbol or name is required.")
+        try:
+            search = yf.Search(cleaned, max_results=1)
+            quotes = getattr(search, "quotes", []) or []
+            if quotes:
+                return str(quotes[0].get("symbol") or "").upper()
+        except Exception:
+            pass
+        explicit_ticker = re.sub(r"[^A-Z0-9.^-]", "", cleaned.upper())
+        return explicit_ticker if explicit_ticker else cleaned.upper().replace(" ", "-")
     if exchange_name not in exchange_suffixes:
         raise ValueError("Exchange must be either 'NSE' or 'BSE'.")
 
@@ -236,12 +249,18 @@ def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
     """Retrieve a complete, normalized market profile with resilient Yahoo fallbacks."""
     ticker = normalize_stock_symbol(symbol, exchange=exchange)
     symbol_name = ticker.rsplit(".", 1)[0]
-    exchange_name = "BSE" if ticker.endswith(".BO") else "NSE"
-    website = (
-        f"https://www.bseindia.com/stock-share-price/{symbol_name}/"
-        if exchange_name == "BSE"
-        else f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}"
-    )
+    if exchange == "US":
+        exchange_name = "NASDAQ/NYSE/US"
+        website = f"https://finance.yahoo.com/quote/{ticker}/"
+        fallback_currency = "USD"
+    else:
+        exchange_name = "BSE" if ticker.endswith(".BO") else "NSE"
+        website = (
+            f"https://www.bseindia.com/stock-share-price/{symbol_name}/"
+            if exchange_name == "BSE"
+            else f"https://www.nseindia.com/get-quotes/equity?symbol={symbol_name}"
+        )
+        fallback_currency = "INR"
     profile = {
         "symbol": ticker,
         "shortName": symbol_name,
@@ -249,7 +268,7 @@ def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
         "sector": "N/A",
         "industry": "N/A",
         "marketCap": None,
-        "currency": "INR",
+        "currency": fallback_currency,
         "trailingPE": None,
         "forwardPE": None,
         "dividendYield": None,
@@ -291,7 +310,7 @@ def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
                 "sector": first_value(info.get("sector"), "N/A"),
                 "industry": first_value(info.get("industry"), "N/A"),
                 "marketCap": first_value(info.get("marketCap")),
-                "currency": first_value(info.get("currency"), "INR"),
+                "currency": first_value(info.get("currency"), fallback_currency),
                 "trailingPE": first_value(info.get("trailingPE")),
                 "forwardPE": first_value(info.get("forwardPE")),
                 "dividendYield": first_value(info.get("dividendYield")),
@@ -303,6 +322,11 @@ def fetch_stock_profile(symbol: str, exchange: str = "NSE") -> dict:
                 "bookValue": first_value(info.get("bookValue")),
                 "priceToBook": first_value(info.get("priceToBook")),
                 "averageVolume": first_value(info.get("averageVolume"), fast_info.get("three_month_average_volume")),
+                "heldPercentInstitutions": first_value(info.get("heldPercentInstitutions")),
+                "heldPercentInsiders": first_value(info.get("heldPercentInsiders")),
+                "sharesShort": first_value(info.get("sharesShort")),
+                "sharesShortPriorMonth": first_value(info.get("sharesShortPriorMonth")),
+                "shortRatio": first_value(info.get("shortRatio")),
                 "website": first_value(info.get("website"), profile["website"]),
                 "exchange": exchange_name,
             }

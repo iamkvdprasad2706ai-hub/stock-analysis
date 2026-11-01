@@ -57,6 +57,11 @@ from stock_analysis.ipo_research import get_issuer_research  # noqa: E402
 from stock_analysis.home_dashboard import (  # noqa: E402
     build_market_overview,
 )
+from stock_analysis.us_stocks import (  # noqa: E402
+    US_STOCK_COLUMNS,
+    US_SECTOR_UNIVERSES,
+    fetch_us_buying_zone,
+)
 
 st.set_page_config(page_title="Indian Stock Dashboard", layout="wide")
 
@@ -259,6 +264,36 @@ def format_market_cap(value: Any) -> str:
         return "N/A"
 
 
+def format_us_currency(value: Any) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        numeric = float(value)
+        if pd.isna(numeric) or numeric == 0:
+            return "N/A"
+        return f"${numeric:,.2f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_us_market_cap(value: Any) -> str:
+    if value is None or value == "":
+        return "N/A"
+    try:
+        numeric = float(value)
+        if pd.isna(numeric) or numeric <= 0:
+            return "N/A"
+        if numeric >= 1_000_000_000_000:
+            return f"${numeric / 1_000_000_000_000:.2f}T"
+        if numeric >= 1_000_000_000:
+            return f"${numeric / 1_000_000_000:.2f}B"
+        if numeric >= 1_000_000:
+            return f"${numeric / 1_000_000:.2f}M"
+        return f"${numeric:,.0f}"
+    except (TypeError, ValueError):
+        return "N/A"
+
+
 def display_value(value: Any, formatter=format_currency) -> str:
     if value is None or value == "":
         return "N/A"
@@ -364,8 +399,13 @@ def cached_ipo_issues() -> IPOFeed:
     return fetch_ipo_issues()
 
 
-st.title("Indian Stock Analysis Dashboard")
-st.caption("Analyze listed stocks on the National Stock Exchange or Bombay Stock Exchange.")
+@st.cache_data(ttl=1800, show_spinner=False)
+def cached_us_buying_zone() -> pd.DataFrame:
+    return fetch_us_buying_zone()
+
+
+st.title("Stock Analysis Dashboard")
+st.caption("Analyze Indian listings and a focused U.S. stock buying-zone screen.")
 
 workspace = st.sidebar.radio(
     "Workspace",
@@ -375,11 +415,12 @@ workspace = st.sidebar.radio(
         "Market screener",
         "Market ideas",
         "Long-term ideas",
+        "US Stocks",
         "IPO analysis",
     ],
     index=0,
 )
-st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: independent small-cap screen. IPO analysis: current and forthcoming NSE issues.")
+st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: Indian small-cap screen. US Stocks: fundamentals and buying-zone screen. IPO analysis: current and forthcoming NSE issues.")
 
 if workspace == "Home / Market overview":
     exchange = "NSE"
@@ -389,10 +430,93 @@ elif workspace == "IPO analysis":
     exchange = ""
     symbol_input = ""
     period = ""
+elif workspace == "US Stocks":
+    exchange = "US"
+    symbol_input = ""
+    period = ""
 else:
     exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
     symbol_input = st.text_input("Stock name or ticker", value="Reliance")
     period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
+
+if workspace == "US Stocks":
+    st.subheader("U.S. Stocks — fundamentally strong buying-zone screen")
+    st.caption(
+        "A focused 20-name universe: 5 Technology, 5 Banking, 5 Quantum Computing, and 5 Other-sector stocks."
+    )
+
+    search_col, period_col = st.columns([3, 1])
+    with search_col:
+        us_search = st.text_input(
+            "Search any U.S. stock",
+            value=st.session_state.get("us_stock_search", ""),
+            placeholder="Ticker or company name, e.g. AAPL or Microsoft",
+        )
+    with period_col:
+        period = st.selectbox(
+            "Time range",
+            ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"],
+            index=3,
+            key="us_stock_period",
+        )
+
+    analyze_col, clear_col = st.columns([1, 4])
+    with analyze_col:
+        analyze_us_stock = st.button("Search stock", type="primary")
+    with clear_col:
+        clear_us_stock = st.button("Clear search")
+
+    if clear_us_stock:
+        st.session_state["us_stock_search"] = ""
+        us_search = ""
+    if analyze_us_stock and us_search.strip():
+        st.session_state["us_stock_search"] = us_search.strip()
+    if us_search.strip():
+        symbol_input = us_search.strip()
+    else:
+        symbol_input = ""
+
+    st.markdown("---")
+    if symbol_input:
+        st.caption(f"Showing selected-stock analysis for {symbol_input} across {period}.")
+    else:
+        st.caption("Search above to run the selected-stock analysis; browse the tracked 20-name screen below.")
+        st.link_button("Open Nasdaq Stock Screener", "https://www.nasdaq.com/market-activity/stocks/screener")
+        st.link_button("Open Yahoo Finance Company Profiles", "https://finance.yahoo.com/")
+        st.info(
+            "Screening combines Yahoo Finance fundamentals, 50/200-day moving averages, and the lower 85% of the "
+            "52-week range. It is research evidence, not a recommendation or guarantee of future returns."
+        )
+
+        with st.spinner("Loading U.S. fundamentals and two years of real price history..."):
+            us_stocks = cached_us_buying_zone()
+
+        if us_stocks.empty:
+            st.warning("U.S. fundamentals or price history are temporarily unavailable. Retry after market feeds recover.")
+        else:
+            buying_count = int(us_stocks["Setup status"].eq("Buying-zone candidate").sum())
+            st.caption(
+                f"{buying_count} of 20 tracked names currently meet the available buying-zone checks. "
+                "The remaining names stay visible as watchlist candidates."
+            )
+            for sector in US_SECTOR_UNIVERSES:
+                sector_rows = us_stocks[us_stocks["Sector"] == sector]
+                if sector_rows.empty:
+                    st.markdown(f"#### {sector}")
+                    st.info("No verified rows were available for this sector.")
+                    continue
+                st.markdown(f"#### {sector}")
+                st.dataframe(sector_rows, width="stretch", hide_index=True)
+
+            st.caption(
+                "Method note: positive ROE, profit margins, revenue growth, valuation, debt profile, and proximity to "
+                "moving averages increase confidence. Debt/equity handling is adapted to banking. Quantum Computing "
+                "names may have weak historical earnings and unusual valuation risk. Missing fields are disclosed rather "
+                "than estimated; data can be delayed or revised. Verify SEC filings, annual reports, insider activity, "
+                "cash flow, valuation, competition, dilution, and liquidity before acting."
+            )
+            st.link_button("Review SEC company filings", "https://www.sec.gov/edgar/search/")
+            st.link_button("Review Nasdaq screener and market data", "https://www.nasdaq.com/market-activity/stocks/screener")
 
 if workspace == "IPO analysis":
     st.subheader("Current and forthcoming IPOs")
@@ -915,6 +1039,9 @@ if symbol_input:
             st.stop()
 
         ticker = normalize_stock_symbol(symbol_input, exchange=exchange)
+        is_us_stock = exchange == "US"
+        format_selected_currency = format_us_currency if is_us_stock else format_currency
+        format_selected_market_cap = format_us_market_cap if is_us_stock else format_market_cap
         profile = fetch_stock_profile(symbol_input, exchange=exchange)
         data = cached_stock_history(ticker, period, exchange)
         data = data.sort_values("date").reset_index(drop=True)
@@ -925,7 +1052,11 @@ if symbol_input:
         returns = compute_daily_returns(data)
         summary = summarize_stock(data)
 
-        top_stocks = fetch_screener_fii_dii_top_stocks(limit=10)
+        top_stocks = (
+            pd.DataFrame()
+            if exchange == "US"
+            else fetch_screener_fii_dii_top_stocks(limit=10)
+        )
         if workspace == "Market ideas":
             st.subheader("Sector-ranked market ideas")
             st.caption("Top three eligible stocks per sector from the Screener.in FII/DII universe, ranked using current market conditions and up to 15 years of price history.")
@@ -1040,9 +1171,9 @@ if symbol_input:
             st.stop()
 
         st.subheader("Stock overview")
-        if top_stocks.empty:
+        if exchange != "US" and top_stocks.empty:
             st.info("The Screener.in top-10 list is temporarily unavailable.")
-        else:
+        elif exchange != "US":
             with st.expander("Top 10 FII and DII buying stocks", expanded=False):
                 st.dataframe(top_stocks, width="stretch", hide_index=True)
 
@@ -1066,17 +1197,17 @@ if symbol_input:
 
         left_col, right_col = st.columns(2)
         with left_col:
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Latest close</div><div class='snapshot-value'>{format_currency(summary['latest_close'])}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Latest close</div><div class='snapshot-value'>{format_selected_currency(summary['latest_close'])}</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Avg daily return</div><div class='snapshot-value {('positive' if summary['average_daily_return'] > 0 else 'negative' if summary['average_daily_return'] < 0 else 'neutral')}'>{summary['average_daily_return']:.2f}%</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W High</div><div class='snapshot-value'>{format_currency(profile.get('fiftyTwoWeekHigh'))}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Market cap</div><div class='snapshot-value'>{format_market_cap(profile.get('marketCap'))}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W High</div><div class='snapshot-value'>{format_selected_currency(profile.get('fiftyTwoWeekHigh'))}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Market cap</div><div class='snapshot-value'>{format_selected_market_cap(profile.get('marketCap'))}</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>P/E</div><div class='snapshot-value'>{display_value(profile.get('trailingPE'))}</div></div>", unsafe_allow_html=True)
 
         with right_col:
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Change</div><div class='snapshot-value {('positive' if summary['percent_change'] > 0 else 'negative' if summary['percent_change'] < 0 else 'neutral')}'>{summary['percent_change']:.2f}%</div></div>", unsafe_allow_html=True)
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Volatility</div><div class='snapshot-value'>{summary['volatility']:.2f}%</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W Low</div><div class='snapshot-value'>{format_currency(profile.get('fiftyTwoWeekLow'))}</div></div>", unsafe_allow_html=True)
-            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Book value</div><div class='snapshot-value'>{format_currency(profile.get('bookValue'))}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>52W Low</div><div class='snapshot-value'>{format_selected_currency(profile.get('fiftyTwoWeekLow'))}</div></div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Book value</div><div class='snapshot-value'>{format_selected_currency(profile.get('bookValue'))}</div></div>", unsafe_allow_html=True)
             dividend_yield = profile.get('dividendYield')
             dividend_text = f"{float(dividend_yield) * 100:.2f}%" if dividend_yield is not None else "N/A"
             st.markdown(f"<div class='snapshot-card'><div class='snapshot-label'>Dividend yield</div><div class='snapshot-value'>{dividend_text}</div></div>", unsafe_allow_html=True)
@@ -1086,7 +1217,8 @@ if symbol_input:
             with portfolio_col1:
                 shares = st.number_input("Quantity", min_value=0.0, value=0.0, step=1.0)
             with portfolio_col2:
-                average_buy_price = st.number_input("Average buy price (₹)", min_value=0.0, value=0.0, step=0.05)
+                buy_currency = "$" if is_us_stock else "₹"
+                average_buy_price = st.number_input(f"Average buy price ({buy_currency})", min_value=0.0, value=0.0, step=0.05)
 
             if shares > 0 and average_buy_price > 0:
                 invested_value = shares * average_buy_price
@@ -1097,9 +1229,9 @@ if symbol_input:
                     {
                         "Portfolio item": ["Invested value", "Current value", "P/L", "Return"],
                         "Value": [
-                            format_currency(invested_value),
-                            format_currency(current_value),
-                            format_currency(profit_loss),
+                            format_selected_currency(invested_value),
+                            format_selected_currency(current_value),
+                            format_selected_currency(profit_loss),
                             f"{return_pct:+.2f}%",
                         ],
                     }
@@ -1108,7 +1240,14 @@ if symbol_input:
             else:
                 st.info("Enter quantity and average buy price to calculate your real position value and return.")
 
-        tab_prices, tab_profile, tab_stats, tab_table, tab_fii, tab_bulk, tab_reco = st.tabs(["Price charts", "Company profile", "Valuation & stats", "Data table", "FII / DII", "Bulk deals", "Recommendations"])
+        if is_us_stock:
+            tab_prices, tab_profile, tab_stats, tab_table, tab_fii, tab_bulk, tab_reco = st.tabs(
+                ["Price charts", "Company profile", "Valuation & stats", "Data table", "Ownership", "SEC filings", "Recommendations"]
+            )
+        else:
+            tab_prices, tab_profile, tab_stats, tab_table, tab_fii, tab_bulk, tab_reco = st.tabs(
+                ["Price charts", "Company profile", "Valuation & stats", "Data table", "FII / DII", "Bulk deals", "Recommendations"]
+            )
 
         with tab_prices:
             technical_chart = make_subplots(
@@ -1250,67 +1389,59 @@ if symbol_input:
             st.dataframe(display, width="stretch")
 
         with tab_fii:
-            fii_df = fetch_fii_data(limit=30)
-            if fii_df.empty:
-                st.info("No recent FII/DII data is available right now.")
+            if is_us_stock:
+                st.caption("U.S. ownership and short-interest data from Yahoo Finance; values may be delayed.")
+                ownership = pd.DataFrame(
+                    {
+                        "Metric": ["Institutional ownership", "Insider ownership", "Shares short", "Shares short (prior month)", "Short ratio"],
+                        "Value": [
+                            f"{profile.get('heldPercentInstitutions') * 100:.2f}%" if profile.get("heldPercentInstitutions") is not None else "N/A",
+                            f"{profile.get('heldPercentInsiders') * 100:.2f}%" if profile.get("heldPercentInsiders") is not None else "N/A",
+                            f"{profile.get('sharesShort'):,.0f}" if profile.get("sharesShort") is not None else "N/A",
+                            f"{profile.get('sharesShortPriorMonth'):,.0f}" if profile.get("sharesShortPriorMonth") is not None else "N/A",
+                            f"{profile.get('shortRatio'):.2f}" if profile.get("shortRatio") is not None else "N/A",
+                        ],
+                    }
+                )
+                st.dataframe(ownership, width="stretch", hide_index=True)
             else:
-                fii_df = fii_df.sort_values("date").reset_index(drop=True)
-                recent_dates = fii_df["date"].dropna().drop_duplicates().nlargest(5)
-                recent_fii_df = fii_df[fii_df["date"].isin(recent_dates)].copy()
-                recent_fii_df = recent_fii_df.sort_values("date").reset_index(drop=True)
-                st.caption("Showing the latest five reported working days of FII/DII activity.")
-
-                fii_view = recent_fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
-                fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
-                st.dataframe(fii_view, width="stretch")
-
-                trend_summary = analyze_institutional_trend(recent_fii_df, recent_window=3)
-                st.subheader("Short-term flow outlook")
-                if trend_summary.empty:
-                    st.info("There is not enough institutional history to estimate a trend.")
+                fii_df = fetch_fii_data(limit=30)
+                if fii_df.empty:
+                    st.info("No recent FII/DII data is available right now.")
                 else:
-                    outlook = trend_summary.rename(
-                        columns={
-                            "category": "Investor type",
-                            "recent_average": "Recent avg (₹ cr)",
-                            "previous_average": "Previous avg (₹ cr)",
-                            "change": "Change (₹ cr)",
-                            "direction": "Direction",
-                            "projected_next": "Projected next (₹ cr)",
-                        }
-                    )
-                    st.dataframe(outlook, width="stretch", hide_index=True)
-                    st.caption("Projection uses the change between the recent and previous five reported observations. It is a statistical signal, not a guaranteed forecast.")
-
-                total_net = recent_fii_df["netValue"].sum()
-                st.metric("Overall net allocation", f"₹{total_net:,.2f} crore")
-                st.caption("Positive values suggest net buying; negative values suggest net selling.")
+                    fii_df = fii_df.sort_values("date").reset_index(drop=True)
+                    recent_dates = fii_df["date"].dropna().drop_duplicates().nlargest(5)
+                    recent_fii_df = fii_df[fii_df["date"].isin(recent_dates)].copy()
+                    recent_fii_df = recent_fii_df.sort_values("date").reset_index(drop=True)
+                    st.caption("Showing the latest five reported working days of FII/DII activity.")
+                    fii_view = recent_fii_df[["date", "category", "buyValue", "sellValue", "netValue"]].copy()
+                    fii_view["date"] = fii_view["date"].dt.strftime("%d-%b-%Y")
+                    st.dataframe(fii_view, width="stretch")
+                    st.metric("Overall net allocation", f"₹{recent_fii_df['netValue'].sum():,.2f} crore")
 
         with tab_bulk:
-            bulk_df = fetch_bulk_deals(limit=12)
-            if bulk_df.empty:
-                st.info("There are no recent bulk deals available right now.")
+            if is_us_stock:
+                st.subheader("U.S. regulatory research")
+                st.link_button("Search SEC filings for this company", f"https://www.sec.gov/edgar/search/#/?q={ticker}")
+                st.link_button("Search Nasdaq insider and institutional activity", f"https://www.nasdaq.com/market-activity/stocks/{ticker.lower()}/institutional-holdings")
+                st.link_button("Open Yahoo Finance profile", profile.get("website") or f"https://finance.yahoo.com/quote/{ticker}/")
+                st.caption("SEC 10-K, 10-Q, 8-K, 13F, Form 4, proxy statements, and investor presentations should be reviewed directly.")
             else:
-                bulk_view = bulk_df.copy()
-                bulk_view["Date"] = bulk_view["Date"].dt.strftime("%d-%b-%Y")
-                st.dataframe(bulk_view[["Date", "Symbol", "Security Name", "Client Name", "Buy/Sell", "Quantity Traded", "Trade Price / Wght. Avg. Price", "Remarks"]], width="stretch")
-
-                buy_sell = bulk_df["Buy/Sell"].value_counts().reset_index()
-                buy_sell.columns = ["Action", "Count"]
-                bulk_chart = px.bar(
-                    buy_sell,
-                    x="Action",
-                    y="Count",
-                    color="Action",
-                    title="Recent Bulk Deal Direction",
-                    template="plotly_white",
-                )
-                bulk_chart.update_layout(showlegend=False)
-                st.plotly_chart(bulk_chart, width="stretch")
+                bulk_df = fetch_bulk_deals(limit=12)
+                if bulk_df.empty:
+                    st.info("There are no recent bulk deals available right now.")
+                else:
+                    bulk_view = bulk_df.copy()
+                    bulk_view["Date"] = bulk_view["Date"].dt.strftime("%d-%b-%Y")
+                    st.dataframe(bulk_view[["Date", "Symbol", "Security Name", "Client Name", "Buy/Sell", "Quantity Traded", "Trade Price / Wght. Avg. Price", "Remarks"]], width="stretch")
 
         with tab_reco:
-            fii_df = fetch_fii_data(limit=12)
-            bulk_df = fetch_bulk_deals(limit=12)
+            if is_us_stock:
+                fii_df = pd.DataFrame()
+                bulk_df = pd.DataFrame()
+            else:
+                fii_df = fetch_fii_data(limit=12)
+                bulk_df = fetch_bulk_deals(limit=12)
             recommendation_history = cached_stock_history(ticker, "15y", exchange)
             recommendation = generate_recommendations(recommendation_history, profile=profile, fii_df=fii_df, bulk_df=bulk_df)
             st.caption("Recommendation signals use up to 15 years of available price history; the chart range above does not change this lookback.")
@@ -1370,7 +1501,7 @@ if symbol_input:
             summary_rsi_text = f"{summary_rsi:.1f}" if summary_rsi is not None else "N/A"
             summary_flow = str(recommendation.get("institutional_flow", "unknown")).capitalize()
             summary_price = recommendation.get("entry_price")
-            summary_price_text = format_currency(summary_price) if summary_price is not None else "N/A"
+            summary_price_text = format_selected_currency(summary_price) if summary_price is not None else "N/A"
             st.markdown(
                 f"<div class='summary-card'>"
                 f"<div class='summary-title'>Summary</div>"

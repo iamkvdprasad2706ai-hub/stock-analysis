@@ -54,6 +54,7 @@ from stock_analysis.ipo_analysis import (  # noqa: E402
     retail_allotment_proxy,
 )
 from stock_analysis.ipo_research import get_issuer_research  # noqa: E402
+from stock_analysis.watchlist import build_watchlist_table  # noqa: E402
 from stock_analysis.home_dashboard import (  # noqa: E402
     build_market_overview,
 )
@@ -412,6 +413,7 @@ workspace = st.sidebar.radio(
     [
         "Home / Market overview",
         "Stock workspace",
+        "Watchlist",
         "Market screener",
         "Market ideas",
         "Long-term ideas",
@@ -420,7 +422,7 @@ workspace = st.sidebar.radio(
     ],
     index=0,
 )
-st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: Indian small-cap screen. US Stocks: fundamentals and buying-zone screen. IPO analysis: current and forthcoming NSE issues.")
+st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Watchlist: tracked stocks and model levels. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: Indian small-cap screen. US Stocks: fundamentals and buying-zone screen. IPO analysis: current and forthcoming NSE issues.")
 
 if workspace == "Home / Market overview":
     exchange = "NSE"
@@ -434,12 +436,102 @@ elif workspace == "US Stocks":
     exchange = "US"
     symbol_input = ""
     period = ""
+elif workspace == "Watchlist":
+    exchange = ""
+    symbol_input = ""
+    period = ""
 else:
     exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
     symbol_input = st.text_input("Stock name or ticker", value="Reliance")
     period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
 
-if workspace == "US Stocks":
+if workspace == "Watchlist":
+    st.subheader("Stock watchlist")
+    st.caption(
+        "Add NSE, BSE, or U.S. stocks to track their latest daily close and model levels. "
+        "The list is saved for this browser session."
+    )
+    st.info(
+        "Market sentiment is a technical heuristic derived from the same trend and momentum model "
+        "as the BUY/HOLD/SELL view; it is not live news or social sentiment. Targets and stop loss "
+        "are illustrative model scenarios, not investment advice."
+    )
+    if "stock_watchlist" not in st.session_state:
+        st.session_state["stock_watchlist"] = []
+
+    with st.form("add_watchlist_stock", clear_on_submit=True):
+        add_col, exchange_col, submit_col = st.columns([3, 1, 1])
+        with add_col:
+            watchlist_input = st.text_input(
+                "Stock name or ticker",
+                placeholder="e.g. Reliance, TCS, AAPL, or Microsoft",
+            )
+        with exchange_col:
+            watchlist_exchange = st.selectbox("Exchange", ["NSE", "BSE", "US"])
+        with submit_col:
+            st.markdown("<div style='height: 1.8rem'></div>", unsafe_allow_html=True)
+            add_stock = st.form_submit_button("Add stock", type="primary")
+
+    if add_stock:
+        try:
+            if not watchlist_input.strip():
+                raise ValueError("Enter a stock name or ticker.")
+            watchlist_symbol = normalize_stock_symbol(watchlist_input, exchange=watchlist_exchange)
+            watchlist_entries = st.session_state["stock_watchlist"]
+            if any(
+                item["symbol"] == watchlist_symbol and item["exchange"] == watchlist_exchange
+                for item in watchlist_entries
+            ):
+                st.warning(f"{watchlist_symbol} is already in your watchlist.")
+            else:
+                watchlist_entries.append({"symbol": watchlist_symbol, "exchange": watchlist_exchange})
+                st.success(f"Added {watchlist_symbol} to your watchlist.")
+        except ValueError as exc:
+            st.error(str(exc))
+
+    watchlist_entries = st.session_state["stock_watchlist"]
+    if not watchlist_entries:
+        st.info("Your watchlist is empty. Add a stock above to see its analysis.")
+    else:
+        with st.spinner("Refreshing watchlist prices and analysis..."):
+            watchlist_histories = {}
+            with ThreadPoolExecutor(max_workers=min(8, len(watchlist_entries))) as executor:
+                history_values = executor.map(
+                    lambda item: cached_stock_history(item["symbol"], "15y", item["exchange"]),
+                    watchlist_entries,
+                )
+                watchlist_histories = {
+                    f"{item['exchange']}:{item['symbol']}": history
+                    for item, history in zip(watchlist_entries, history_values)
+                }
+
+        watchlist_table = build_watchlist_table(watchlist_entries, watchlist_histories)
+        display_watchlist = watchlist_table.copy()
+        for column in ("Previous close", "Last close", "Target 1", "Target 2", "Target 3", "Stop loss"):
+            display_watchlist[column] = display_watchlist.apply(
+                lambda row: (
+                    f"{'$' if row['Exchange'] == 'US' else '₹'}{row[column]:,.2f}"
+                    if pd.notna(row[column])
+                    else "N/A"
+                ),
+                axis=1,
+            )
+        st.dataframe(display_watchlist, width="stretch", hide_index=True)
+
+        remove_options = {
+            f"{item['symbol']} ({item['exchange']})": index
+            for index, item in enumerate(watchlist_entries)
+        }
+        remove_col, button_col = st.columns([3, 1])
+        with remove_col:
+            remove_choice = st.selectbox("Remove a stock", list(remove_options), key="watchlist_remove_choice")
+        with button_col:
+            if st.button("Remove", key="remove_watchlist_stock"):
+                st.session_state["stock_watchlist"].pop(remove_options[remove_choice])
+                st.rerun()
+
+    st.stop()
+elif workspace == "US Stocks":
     st.subheader("U.S. Stocks — fundamentally strong buying-zone screen")
     st.caption(
         "A focused 20-name universe: 5 Technology, 5 Banking, 5 Quantum Computing, and 5 Other-sector stocks."

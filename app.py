@@ -54,7 +54,10 @@ from stock_analysis.ipo_analysis import (  # noqa: E402
     retail_allotment_proxy,
 )
 from stock_analysis.ipo_research import get_issuer_research  # noqa: E402
-from stock_analysis.watchlist import build_watchlist_table  # noqa: E402
+from stock_analysis.watchlist import (  # noqa: E402
+    build_watchlist_analysis_link,
+    build_watchlist_table,
+)
 from stock_analysis.home_dashboard import (  # noqa: E402
     build_market_overview,
 )
@@ -408,6 +411,19 @@ def cached_us_buying_zone() -> pd.DataFrame:
 st.title("Stock Analysis Dashboard")
 st.caption("Analyze Indian listings and a focused U.S. stock buying-zone screen.")
 
+analysis_symbol = str(st.query_params.get("analysis_symbol", "")).strip()
+analysis_exchange = str(st.query_params.get("analysis_exchange", "")).strip().upper()
+if analysis_symbol and analysis_exchange in {"NSE", "BSE", "US"}:
+    if analysis_exchange == "US":
+        st.session_state["workspace_selection"] = "US Stocks"
+        st.session_state["us_stock_search"] = analysis_symbol
+    else:
+        st.session_state["workspace_selection"] = "Stock workspace"
+        st.session_state["stock_workspace_exchange"] = analysis_exchange
+        st.session_state["stock_workspace_symbol"] = analysis_symbol
+    del st.query_params["analysis_symbol"]
+    del st.query_params["analysis_exchange"]
+
 workspace = st.sidebar.radio(
     "Workspace",
     [
@@ -421,6 +437,7 @@ workspace = st.sidebar.radio(
         "IPO analysis",
     ],
     index=0,
+    key="workspace_selection",
 )
 st.sidebar.caption("Home: market snapshot. Stock workspace: analysis. Watchlist: tracked stocks and model levels. Market screener: discovery. Market ideas: ranked setups. Long-term ideas: Indian small-cap screen. US Stocks: fundamentals and buying-zone screen. IPO analysis: current and forthcoming NSE issues.")
 
@@ -441,8 +458,12 @@ elif workspace == "Watchlist":
     symbol_input = ""
     period = ""
 else:
-    exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0)
-    symbol_input = st.text_input("Stock name or ticker", value="Reliance")
+    exchange = st.selectbox("Exchange", ["NSE", "BSE"], index=0, key="stock_workspace_exchange")
+    symbol_input = st.text_input(
+        "Stock name or ticker",
+        value="Reliance",
+        key="stock_workspace_symbol",
+    )
     period = st.selectbox("Time range", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "15y"], index=3)
 
 if workspace == "Watchlist":
@@ -516,7 +537,22 @@ if workspace == "Watchlist":
                 ),
                 axis=1,
             )
-        st.dataframe(display_watchlist, width="stretch", hide_index=True)
+        display_watchlist["Full analysis"] = [
+            build_watchlist_analysis_link(item["symbol"], item["exchange"])
+            for item in watchlist_entries
+        ]
+        st.dataframe(
+            display_watchlist,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Full analysis": st.column_config.LinkColumn(
+                    "Full analysis",
+                    display_text="Open analysis",
+                    help="Open the full stock analysis workspace for this symbol.",
+                )
+            },
+        )
 
         remove_options = {
             f"{item['symbol']} ({item['exchange']})": index

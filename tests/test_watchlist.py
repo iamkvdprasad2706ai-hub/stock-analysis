@@ -1,7 +1,13 @@
 import pandas as pd
 
 from stock_analysis.analysis import generate_recommendations
-from stock_analysis.watchlist import build_watchlist_table
+from stock_analysis.watchlist import build_watchlist_analysis_link, build_watchlist_table
+
+
+def test_watchlist_analysis_link_preserves_symbol_and_exchange():
+    link = build_watchlist_analysis_link("BRK.B", "US")
+
+    assert link == "?analysis_symbol=BRK.B&analysis_exchange=US"
 
 
 def test_watchlist_includes_closes_recommendation_levels_and_sentiment():

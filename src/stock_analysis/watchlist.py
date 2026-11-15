@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from urllib.parse import urlencode
+
 import pandas as pd
 
 from stock_analysis.analysis import generate_recommendations
@@ -19,6 +21,12 @@ WATCHLIST_COLUMNS = [
     "Signal date",
     "Data status",
 ]
+
+
+def build_watchlist_analysis_link(symbol: str, exchange: str) -> str:
+    """Create a query link that opens the stock's full analysis workspace."""
+    query = urlencode({"analysis_symbol": symbol, "analysis_exchange": exchange})
+    return f"?{query}"
 
 
 def build_watchlist_table(

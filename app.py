@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -26,6 +27,11 @@ from stock_analysis.analysis import (  # noqa: E402
     compute_daily_returns,
     generate_recommendations,
     summarize_stock,
+)
+from stock_analysis.browser_storage import (  # noqa: E402
+    WATCHLIST_STORAGE_KEY,
+    browser_storage,
+    parse_watchlist_payload,
 )
 from stock_analysis.data import (  # noqa: E402
     fetch_bulk_deals,
@@ -470,15 +476,68 @@ if workspace == "Watchlist":
     st.subheader("Stock watchlist")
     st.caption(
         "Add NSE, BSE, or U.S. stocks to track their latest daily close and model levels. "
-        "The list is saved for this browser session."
+        "Your list is saved in this browser on this device."
     )
     st.info(
         "Market sentiment is a technical heuristic derived from the same trend and momentum model "
         "as the BUY/HOLD/SELL view; it is not live news or social sentiment. Targets and stop loss "
         "are illustrative model scenarios, not investment advice."
     )
-    if "stock_watchlist" not in st.session_state:
-        st.session_state["stock_watchlist"] = []
+    def queue_watchlist_save() -> None:
+        request_number = st.session_state.get("watchlist_save_number", 0) + 1
+        st.session_state["watchlist_save_number"] = request_number
+        st.session_state["watchlist_save_request"] = f"save-watchlist-{request_number}"
+
+    if "stock_watchlist_hydrated" not in st.session_state:
+        if "stock_watchlist" in st.session_state:
+            st.session_state["stock_watchlist_hydrated"] = True
+            queue_watchlist_save()
+        else:
+            saved_watchlist = browser_storage(
+                "read",
+                WATCHLIST_STORAGE_KEY,
+                request_id="load-watchlist",
+            )
+            if not isinstance(saved_watchlist, dict) or saved_watchlist.get("request_id") != "load-watchlist":
+                st.info("Loading your saved watchlist from this browser...")
+                st.stop()
+            if saved_watchlist.get("error"):
+                st.session_state["stock_watchlist"] = []
+                st.session_state["watchlist_storage_unavailable"] = True
+                st.session_state["watchlist_storage_error"] = str(saved_watchlist["error"])
+            else:
+                try:
+                    st.session_state["stock_watchlist"] = parse_watchlist_payload(saved_watchlist.get("value"))
+                except ValueError as exc:
+                    st.error(f"Could not load the saved watchlist: {exc}")
+                    st.stop()
+            st.session_state["stock_watchlist_hydrated"] = True
+
+    pending_save = st.session_state.get("watchlist_save_request")
+    if pending_save:
+        save_result = browser_storage(
+            "write",
+            WATCHLIST_STORAGE_KEY,
+            request_id=pending_save,
+            payload=json.dumps(st.session_state["stock_watchlist"], separators=(",", ":")),
+        )
+        if not isinstance(save_result, dict) or save_result.get("request_id") != pending_save:
+            st.info("Saving your watchlist in this browser...")
+            st.stop()
+        del st.session_state["watchlist_save_request"]
+        if save_result.get("error"):
+            st.session_state["watchlist_storage_unavailable"] = True
+            st.session_state["watchlist_storage_error"] = str(save_result["error"])
+        elif save_result.get("saved"):
+            st.rerun()
+
+    if st.session_state.get("watchlist_storage_unavailable"):
+        st.warning(
+            "Browser storage is unavailable. Changes will last only for this app session. "
+            f"Storage error: {st.session_state.get('watchlist_storage_error', 'unknown error')}"
+        )
+    else:
+        st.caption("Changes are saved automatically and remain available on this browser and device.")
 
     with st.form("add_watchlist_stock", clear_on_submit=True):
         add_col, exchange_col, submit_col = st.columns([3, 1, 1])
@@ -506,6 +565,9 @@ if workspace == "Watchlist":
                 st.warning(f"{watchlist_symbol} is already in your watchlist.")
             else:
                 watchlist_entries.append({"symbol": watchlist_symbol, "exchange": watchlist_exchange})
+                if not st.session_state.get("watchlist_storage_unavailable"):
+                    queue_watchlist_save()
+                    st.rerun()
                 st.success(f"Added {watchlist_symbol} to your watchlist.")
         except ValueError as exc:
             st.error(str(exc))
@@ -564,6 +626,8 @@ if workspace == "Watchlist":
         with button_col:
             if st.button("Remove", key="remove_watchlist_stock"):
                 st.session_state["stock_watchlist"].pop(remove_options[remove_choice])
+                if not st.session_state.get("watchlist_storage_unavailable"):
+                    queue_watchlist_save()
                 st.rerun()
 
     st.stop()

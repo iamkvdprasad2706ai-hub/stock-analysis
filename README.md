@@ -26,7 +26,7 @@ Then open the local URL shown in the terminal. The market screener and instituti
 
 The Long-term ideas workspace provides illustrative scenario levels, not investment advice or a guarantee of multibagger returns. Order-book strength and legal implications are not verified by the available feeds; review company filings and seek independent advice.
 
-The Watchlist is retained for the current browser session. Its sentiment is a technical heuristic, not a live news/social sentiment feed, and its target and stop-loss levels are illustrative model scenarios.
+The Watchlist is saved in browser local storage and persists across app sessions on the same browser and device; it is not synced to other devices. Its sentiment is a technical heuristic, not a live news/social sentiment feed, and its target and stop-loss levels are illustrative model scenarios.
 
 The IPO analysis workspace combines NSE's public issue feeds with issuer facts verified from NSE-hosted Red Herring Prospectuses for covered live issues. Research snapshots are dated, retain reported periods and units, and identify figures that remain unverified rather than estimating them. NSE does not publish dependable listing-price forecasts; the displayed price cases are sensitivities, not predictions. The inverse retail-subscription figure is only an oversubscription proxy, not an individual allotment probability. Review each issuer's latest offer document and valuation-basis document before deciding whether to apply.
 

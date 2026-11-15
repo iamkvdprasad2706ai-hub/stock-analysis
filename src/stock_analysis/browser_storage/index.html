@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body>
+    <script>
+      function sendValue(value) {
+        window.parent.postMessage(
+          {
+            isStreamlitMessage: true,
+            type: "streamlit:setComponentValue",
+            value: value,
+            dataType: "json",
+          },
+          "*"
+        );
+      }
+
+      window.addEventListener("message", function (event) {
+        if (event.source !== window.parent) return;
+        const message = event.data;
+        if (!message || message.type !== "streamlit:render") return;
+
+        const args = message.args || {};
+        const requestId = args.request_id;
+        const storageKey = args.storage_key;
+        let response = { request_id: requestId };
+
+        try {
+          if (args.command === "read") {
+            response.value = window.localStorage.getItem(storageKey);
+          } else if (args.command === "write") {
+            window.localStorage.setItem(storageKey, args.payload);
+            response.saved = true;
+          } else {
+            response.error = "Unsupported browser storage command.";
+          }
+        } catch (error) {
+          response.error = error instanceof Error ? error.message : String(error);
+        }
+
+        sendValue(response);
+      });
+
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 },
+        "*"
+      );
+      window.parent.postMessage(
+        { isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: 0 },
+        "*"
+      );
+    </script>
+  </body>
+</html>
